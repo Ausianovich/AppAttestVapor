@@ -15,12 +15,30 @@ let package = Package(
             targets: ["AppAttestDevice"]
         ),
     ],
+    dependencies: [
+        .package(
+            url: "https://github.com/pointfreeco/swift-dependencies",
+            from: "1.14.1"
+        ),
+    ],
     targets: [
         .target(
-            name: "AppAttestVapor"
+            name: "AppAttestVapor",
+            dependencies: [
+                .product(
+                    name: "Dependencies",
+                    package: "swift-dependencies"
+                ),
+            ]
         ),
         .target(
-            name: "AppAttestDevice"
+            name: "AppAttestDevice",
+            dependencies: [
+                .product(
+                    name: "Dependencies",
+                    package: "swift-dependencies"
+                ),
+            ]
         ),
         .testTarget(
             name: "AppAttestVaporTests",
