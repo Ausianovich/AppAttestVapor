@@ -1,0 +1,13 @@
+@Tutorials(name: "AppAttestVapor") {
+    @Intro(title: "Protect a Vapor server") {
+        Configure App Attest service endpoints and protect selected Vapor routes.
+    }
+
+    @Chapter(name: "Server integration") {
+        Connect short-lived challenges, durable credentials, and assertion middleware.
+
+        @Image(source: "ServerIntegration.svg", alt: "A request passing through App Attest middleware before reaching a protected Vapor handler.")
+
+        @TutorialReference(tutorial: "doc:IntegrateAppAttestVapor")
+    }
+}

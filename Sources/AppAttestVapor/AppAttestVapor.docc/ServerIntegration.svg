@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675" viewBox="0 0 1200 675" role="img" aria-labelledby="title description">
+  <title id="title">Vapor server integration</title>
+  <desc id="description">A client request passes through App Attest middleware before reaching a protected Vapor handler.</desc>
+  <rect width="1200" height="675" rx="48" fill="#0b1220"/>
+  <g font-family="-apple-system, BlinkMacSystemFont, sans-serif" text-anchor="middle">
+    <rect x="80" y="235" width="260" height="205" rx="28" fill="#17233a" stroke="#6ea8fe" stroke-width="4"/>
+    <text x="210" y="320" fill="#ffffff" font-size="34" font-weight="700">Client request</text>
+    <text x="210" y="370" fill="#a9bad6" font-size="24">App Attest headers</text>
+
+    <path d="M360 338 H480" stroke="#6ea8fe" stroke-width="12" stroke-linecap="round"/>
+    <path d="M458 308 L492 338 L458 368" fill="none" stroke="#6ea8fe" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="500" y="175" width="300" height="325" rx="34" fill="#123b34" stroke="#46d6a0" stroke-width="4"/>
+    <path d="M650 230 L730 265 V330 C730 390 696 430 650 452 C604 430 570 390 570 330 V265 Z" fill="#46d6a0" opacity="0.2" stroke="#46d6a0" stroke-width="8"/>
+    <path d="M614 336 L642 364 L691 306" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="650" y="485" fill="#ffffff" font-size="30" font-weight="700">AppAttestMiddleware</text>
+
+    <path d="M820 338 H940" stroke="#46d6a0" stroke-width="12" stroke-linecap="round"/>
+    <path d="M918 308 L952 338 L918 368" fill="none" stroke="#46d6a0" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <rect x="960" y="235" width="180" height="205" rx="28" fill="#33245a" stroke="#b998ff" stroke-width="4"/>
+    <text x="1050" y="320" fill="#ffffff" font-size="32" font-weight="700">Vapor</text>
+    <text x="1050" y="370" fill="#d7c9f5" font-size="24">handler</text>
+  </g>
+</svg>

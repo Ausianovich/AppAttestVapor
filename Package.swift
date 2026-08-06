@@ -110,7 +110,8 @@ let package = Package(
                     name: "OpenAPIRuntime",
                     package: "swift-openapi-runtime"
                 ),
-            ]
+            ],
+            resources: [.process("Resources/PrivacyInfo.xcprivacy")]
         ),
         .testTarget(
             name: "AppAttestVaporTests",
