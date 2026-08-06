@@ -5,6 +5,7 @@ enum AppAttestError: Error {
     case invalid
     case invalidProof
     case challengeMissing
+    case credentialMissing
     case unavailable
 
     private var status: HTTPStatus {
@@ -13,7 +14,7 @@ enum AppAttestError: Error {
             .badRequest
         case .invalidProof:
             .forbidden
-        case .challengeMissing:
+        case .challengeMissing, .credentialMissing:
             .unauthorized
         case .unavailable:
             .serviceUnavailable
@@ -26,6 +27,8 @@ enum AppAttestError: Error {
             "app_attest_invalid"
         case .challengeMissing:
             "app_attest_challenge_missing"
+        case .credentialMissing:
+            "app_attest_credential_missing"
         case .unavailable:
             "app_attest_unavailable"
         }
