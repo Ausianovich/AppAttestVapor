@@ -63,6 +63,35 @@ struct AppAttestServiceHTTP<Base: ClientTransport>: Sendable {
         }
     }
 
+    func inspect(
+        response: HTTPResponse,
+        body: HTTPBody?
+    ) async throws -> (recovery: AppAttestDeviceError?, body: HTTPBody?) {
+        guard response.status.code >= 400, let body else {
+            return (nil, body)
+        }
+        let data = try await Data(collecting: body, upTo: .max)
+        let rebuiltBody = HTTPBody(data)
+        guard
+            response.status == .unauthorized,
+            let error = try? JSONDecoder().decode(
+                AppAttestErrorResponse.self,
+                from: data
+            )
+        else {
+            return (nil, rebuiltBody)
+        }
+
+        switch error.code {
+        case "app_attest_challenge_missing":
+            return (.challengeMissing, rebuiltBody)
+        case "app_attest_credential_missing":
+            return (.credentialMissing, rebuiltBody)
+        default:
+            return (nil, rebuiltBody)
+        }
+    }
+
     private func send<Payload: Encodable>(
         path: String,
         payload: Payload,

@@ -32,43 +32,62 @@ public actor AppAttestTransport<Base: ClientTransport>: ClientTransport {
         await acquireSendGate()
         defer { releaseSendGate() }
 
-        let keyID = try await ensureRegistered(baseURL: baseURL)
+        var keyID = try await ensureRegistered(baseURL: baseURL)
         let bodyData: Data
-        let forwardedBody: HTTPBody?
+        let hasBody: Bool
         if let body {
             bodyData = try await Data(collecting: body, upTo: .max)
-            forwardedBody = HTTPBody(bodyData)
+            hasBody = true
         } else {
             bodyData = Data()
-            forwardedBody = nil
+            hasBody = false
         }
-        let challenge = try await serviceHTTP.challenge(
-            keyID: keyID,
-            baseURL: baseURL
-        )
-        let clientData = try SignedRequest.clientData(
-            challenge: challenge.data,
-            method: request.method.rawValue,
-            pathAndQuery: request.path ?? "/",
-            body: bodyData
-        )
-        let assertion = try await service.generateAssertion(
-            keyID,
-            Data(SHA256.hash(data: clientData))
-        )
+        var retriesRemaining = 1
 
-        var signedRequest = request
-        signedRequest.headerFields[HTTPField.Name(AppAttestHeaders.keyID)!] = keyID
-        signedRequest.headerFields[HTTPField.Name(AppAttestHeaders.challenge)!]
-            = challenge.encoded
-        signedRequest.headerFields[HTTPField.Name(AppAttestHeaders.assertion)!]
-            = assertion.base64EncodedString()
-        return try await serviceHTTP.base.send(
-            signedRequest,
-            body: forwardedBody,
-            baseURL: baseURL,
-            operationID: operationID
-        )
+        while true {
+            let challenge = try await serviceHTTP.challenge(
+                keyID: keyID,
+                baseURL: baseURL
+            )
+            let clientData = try SignedRequest.clientData(
+                challenge: challenge.data,
+                method: request.method.rawValue,
+                pathAndQuery: request.path ?? "/",
+                body: bodyData
+            )
+            let assertion = try await service.generateAssertion(
+                keyID,
+                Data(SHA256.hash(data: clientData))
+            )
+
+            var signedRequest = request
+            signedRequest.headerFields[HTTPField.Name(AppAttestHeaders.keyID)!]
+                = keyID
+            signedRequest.headerFields[HTTPField.Name(AppAttestHeaders.challenge)!]
+                = challenge.encoded
+            signedRequest.headerFields[HTTPField.Name(AppAttestHeaders.assertion)!]
+                = assertion.base64EncodedString()
+            let (response, responseBody) = try await serviceHTTP.base.send(
+                signedRequest,
+                body: hasBody ? HTTPBody(bodyData) : nil,
+                baseURL: baseURL,
+                operationID: operationID
+            )
+            let inspected = try await serviceHTTP.inspect(
+                response: response,
+                body: responseBody
+            )
+            guard retriesRemaining > 0, let recovery = inspected.recovery else {
+                return (response, inspected.body)
+            }
+            retriesRemaining -= 1
+
+            if recovery == .credentialMissing {
+                try await keyIDStore.delete()
+                pendingKeyID = nil
+            }
+            keyID = try await ensureRegistered(baseURL: baseURL)
+        }
     }
 
     func ensureRegistered(baseURL: URL) async throws -> String {
