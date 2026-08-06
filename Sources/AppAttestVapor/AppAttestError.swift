@@ -3,12 +3,18 @@ import Vapor
 
 enum AppAttestError: Error {
     case invalid
+    case invalidProof
+    case challengeMissing
     case unavailable
 
     private var status: HTTPStatus {
         switch self {
         case .invalid:
             .badRequest
+        case .invalidProof:
+            .forbidden
+        case .challengeMissing:
+            .unauthorized
         case .unavailable:
             .serviceUnavailable
         }
@@ -16,8 +22,10 @@ enum AppAttestError: Error {
 
     private var code: String {
         switch self {
-        case .invalid:
+        case .invalid, .invalidProof:
             "app_attest_invalid"
+        case .challengeMissing:
+            "app_attest_challenge_missing"
         case .unavailable:
             "app_attest_unavailable"
         }
