@@ -6,7 +6,7 @@ created: 2026-08-05
 updated: 2026-08-06
 tags: [architecture, security]
 keywords: [AppAttestVapor, AppAttestDevice, AppAttestTransport, AppAttestMiddleware, VaporValkey, ClientTransport, DCAppAttestService, keyID, challenge, assertion, attestation]
-related: [app_attest_vapor.md, app_attest_device.md]
+related: []
 ---
 
 ## TL;DR
@@ -54,6 +54,7 @@ advanceCounter(keyID, to: newValue) -> Bool
 ```
 
 `advanceCounter` must atomically succeed only when `newValue` is greater than the stored value. PostgreSQL/Fluent is the expected host implementation; the package does not own a database schema.
+Concrete model, migration, SQL update, and `.database(app.db)` wiring: [AppAttestVapor server integration](../runbooks/vapor_server_integration.md).
 
 ## Interactions
 
@@ -128,5 +129,6 @@ Server errors use a short JSON body with stable `code`; status and code distingu
 
 ## Related
 
+- [AppAttestVapor server integration](../runbooks/vapor_server_integration.md)
 - [AppAttestVapor API](../api/app_attest_vapor.md)
 - [AppAttestDevice API](../api/app_attest_device.md)

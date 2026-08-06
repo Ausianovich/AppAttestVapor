@@ -6,7 +6,7 @@ created: 2026-08-06
 updated: 2026-08-06
 tags: [api, security, vapor]
 keywords: [AppAttestVapor, AppAttestConfiguration, AppAttestMiddleware, AppAttestCredentialClient, prepareDependencies, VaporTransport, VaporValkey, ValkeyClient, advanceCounter, app_attest_unavailable]
-related: []
+related: [app_attest_integration.md]
 ---
 
 ## TL;DR
@@ -26,51 +26,89 @@ Read when: configuring a Vapor host | connecting Valkey or PostgreSQL | protecti
 | `AppAttestMiddleware()` | Verifies App Attest headers before calling downstream handler |
 | `AppAttestConfiguration` | Team ID, Bundle ID, environment, route prefix, challenge TTL |
 | `DependencyValues.appAttestCredential` | Four host-owned durable credential closures |
+| `prepareDependencies` | Public startup function from Point-Free `Dependencies`; installs host implementation before first request |
 
 Defaults: route prefix `/app-attest`; challenge TTL `60` seconds.
 
 ## Consumers
 
-Configure Valkey and durable credentials before the first request:
+Complete empty-server integration, including package dependencies, Fluent model, migration, concrete credential client, configuration, routes, and validation: [AppAttestVapor server integration](../runbooks/vapor_server_integration.md).
+
+`prepareDependencies` does not come from Vapor or `AppAttestVapor`. Host target imports it from the Point-Free package `swift-dependencies`:
+
+```swift
+// Package.swift
+dependencies: [
+    .package(
+        url: "https://github.com/pointfreeco/swift-dependencies",
+        from: "1.14.1"
+    ),
+]
+
+.executableTarget(
+    name: "App",
+    dependencies: [
+        .product(
+            name: "Dependencies",
+            package: "swift-dependencies"
+        ),
+    ]
+)
+```
+
+After implementing `AppAttestCredentialClient.database(_:)`, configure every dependency inside the server's existing `configure(_:)` function:
 
 ```swift
 import AppAttestVapor
 import Dependencies
-import Foundation
+import Fluent
+import FluentPostgresDriver
 import Valkey
 import Vapor
 import VaporValkey
 
-let app = try await Application.make(.detect)
-app.valkey = ValkeyClient(
-    .hostname("localhost", port: 6379),
-    eventLoopGroup: app.eventLoopGroup,
-    logger: app.logger
-)
+func configure(_ app: Application) async throws {
+    let databaseURL = Environment.get("DATABASE_URL")
+        ?? "postgres://postgres:postgres@127.0.0.1:5432/app_attest"
 
-prepareDependencies {
-    $0.appAttestCredential = AppAttestCredentialClient(
-        saveCredential: { keyID, publicKey, counter in
-            try await credentials.insert(keyID, publicKey, counter)
-        },
-        getPublicKey: { keyID in try await credentials.publicKey(keyID) },
-        getCounter: { keyID in try await credentials.counter(keyID) },
-        advanceCounter: { keyID, newCounter in
-            try await credentials.advanceCounter(keyID, to: newCounter)
-        }
+    app.databases.use(try .postgres(url: databaseURL), as: .psql)
+    app.migrations.add(CreateAppAttestCredential())
+
+    app.valkey = ValkeyClient(
+        .hostname("127.0.0.1", port: 6379),
+        eventLoopGroup: app.eventLoopGroup,
+        logger: app.logger
     )
+
+    // `prepareDependencies` comes from `import Dependencies`.
+    prepareDependencies {
+        // `appAttestCredential` is exposed by AppAttestVapor.
+        // `.database(app.db)` is the host implementation from the runbook.
+        $0.appAttestCredential = .database(app.db)
+    }
+
+    app.appAttest.configure(
+        AppAttestConfiguration(
+            teamID: "TEAMID",
+            bundleID: "com.example.app",
+            environment: .production
+        )
+    )
+
+    try routes(app)
 }
-
-app.appAttest.configure(
-    AppAttestConfiguration(
-        teamID: "TEAMID",
-        bundleID: "com.example.app",
-        environment: .production
-    )
-)
 ```
 
-`credentials` is host code backed by durable storage. `prepareDependencies` must run once, before any dependency access.
+Origin of each non-local symbol:
+
+| Symbol | Defined by | Created or called where |
+|---|---|---|
+| `prepareDependencies` | Product `Dependencies` from `swift-dependencies` | Called once in `configure(_:)` |
+| `$0.appAttestCredential` | `AppAttestVapor` extension on `DependencyValues` | Assigned inside `prepareDependencies` |
+| `app.db` | Fluent | Available after `app.databases.use(...)` |
+| `.database(app.db)` | Host extension implemented in runbook | Creates concrete `AppAttestCredentialClient` |
+
+`prepareDependencies` changes the process-wide dependency value for the application lifetime. Call it once during startup, before App Attest routes or middleware can access `appAttestCredential`.
 
 Protect generated OpenAPI handlers by passing the grouped routes to the host-owned `VaporTransport`:
 
@@ -147,5 +185,6 @@ RETURNING counter;
 
 ## Related
 
+- [AppAttestVapor server integration](../runbooks/vapor_server_integration.md)
 - [App Attest integration](../architecture/app_attest_integration.md)
 - [AppAttestDevice API](app_attest_device.md)
