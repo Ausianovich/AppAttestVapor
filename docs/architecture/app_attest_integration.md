@@ -1,12 +1,12 @@
 ---
 title: App Attest Integration
 type: architecture
-status: draft
+status: active
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 tags: [architecture, security]
 keywords: [AppAttestVapor, AppAttestDevice, AppAttestTransport, AppAttestMiddleware, VaporValkey, ClientTransport, DCAppAttestService, keyID, challenge, assertion, attestation]
-related: []
+related: [app_attest_vapor.md, app_attest_device.md]
 ---
 
 ## TL;DR
@@ -84,6 +84,7 @@ advanceCounter(keyID, to: newValue) -> Bool
 - Device: generated `Client` receives `AppAttestTransport(base: URLSessionTransport(), ...)` as its `ClientTransport`.
 - Server: `VaporTransport` receives `app.grouped(AppAttestMiddleware())` as its `RoutesBuilder`.
 - `/app-attest/*` routes register directly on `Application`, outside protected group -> no middleware recursion.
+- Concrete OpenAPI transports remain host dependencies; this package depends only on `OpenAPIRuntime`.
 
 ## Constraints
 
@@ -127,6 +128,5 @@ Server errors use a short JSON body with stable `code`; status and code distingu
 
 ## Related
 
-- Apple: `Validating apps that connect to your server`
-- Apple: `Attestation Object Validation Guide`
-- Swift OpenAPI `ClientTransport` and Vapor `RoutesBuilder`
+- [AppAttestVapor API](../api/app_attest_vapor.md)
+- [AppAttestDevice API](../api/app_attest_device.md)
