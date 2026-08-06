@@ -91,7 +91,8 @@ let package = Package(
                     name: "X509",
                     package: "swift-certificates"
                 ),
-            ]
+            ],
+            resources: [.process("Resources")]
         ),
         .target(
             name: "AppAttestDevice",
@@ -116,6 +117,10 @@ let package = Package(
             dependencies: [
                 "AppAttestVapor",
                 .product(
+                    name: "Crypto",
+                    package: "swift-crypto"
+                ),
+                .product(
                     name: "DependenciesTestSupport",
                     package: "swift-dependencies"
                 ),
@@ -123,7 +128,12 @@ let package = Package(
                     name: "VaporTesting",
                     package: "vapor"
                 ),
-            ]
+                .product(
+                    name: "X509",
+                    package: "swift-certificates"
+                ),
+            ],
+            resources: [.copy("Fixtures")]
         ),
         .testTarget(
             name: "AppAttestDeviceTests",
