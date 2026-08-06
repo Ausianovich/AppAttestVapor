@@ -18,6 +18,10 @@ extension Application {
 
         public func configure(_ configuration: AppAttestConfiguration) {
             application.storage[ConfigurationKey.self] = configuration
+            AppAttestRoutes.register(
+                on: application,
+                configuration: configuration
+            )
         }
 
         var configuration: AppAttestConfiguration? {
