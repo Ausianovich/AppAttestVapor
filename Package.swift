@@ -143,6 +143,10 @@ let package = Package(
                     name: "DependenciesTestSupport",
                     package: "swift-dependencies"
                 ),
+                .product(
+                    name: "OpenAPIRuntime",
+                    package: "swift-openapi-runtime"
+                ),
             ]
         ),
         .testTarget(
