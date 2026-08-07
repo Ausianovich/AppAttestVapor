@@ -2,35 +2,43 @@
 title: AppAttestDevice API
 type: api
 status: active
+updated: 2026-08-07
 created: 2026-08-06
-updated: 2026-08-06
 tags: [api, security, device]
 keywords: [AppAttestDevice, AppAttestTransport, ClientTransport, URLSessionTransport, DCAppAttestService, KeyChain, keyID, generateAssertion, app_attest_challenge_missing, app_attest_credential_missing]
 related: [app_attest_vapor.md]
 ---
 
 ## TL;DR
-`AppAttestTransport` wraps any OpenAPI `ClientTransport`, registers one App Attest key, and signs protected requests sequentially.
-Read when: configuring a generated client | diagnosing registration or recovery | evaluating device platform behavior
+`AppAttestTransport` wraps any OpenAPI `ClientTransport`, performs one-time attestation, then signs each protected request.
+
+Use this page when wiring a generated OpenAPI client, debugging registration failures, or tuning retry behavior.
 
 ## Summary
-`AppAttestDevice` uses `DCAppAttestService` and stores only the accepted `keyID` in Keychain. Every protected request receives a fresh server challenge and an Apple assertion over canonical method, path/query, and body data. Requests are buffered and serialized to preserve assertion-counter order. Recovery is limited to one retry for the two stable recoverable server codes.
+The transport performs all App Attest state transitions locally:
 
----
+- Checks local support
+- Loads or creates `keyID`
+- Requests server challenge
+- Generates attestation/assertion with `DCAppAttestService`
+- Sends signed protected request
 
-## Quick ref
+Proof generation runs in an actor and is intentionally sequential (`isSending` gate), so protected requests are serialized and counters stay monotonic.
+
+## Quick reference
 
 | API | Contract |
 |---|---|
-| `AppAttestTransport(base:routePrefix:)` | Public actor conforming to `ClientTransport` |
-| `routePrefix` | Defaults to `/app-attest`; must match server configuration |
-| `AppAttestDeviceError.unsupported` | App Attest unavailable; base transport not called |
-| `AppAttestDeviceError.invalidResponse` | Invalid challenge response |
-| `AppAttestDeviceError.registrationFailed` | Server rejected registration |
+| `AppAttestTransport(base:routePrefix:)` | Wraps any `ClientTransport` and injects App Attest headers |
+| `routePrefix` | Must match `AppAttestConfiguration.routePrefix` on server |
+| `AppAttestDeviceError.unsupported` | Local support is false; protected send is rejected |
+| `AppAttestTransport.ensureRegistered(baseURL:)` | Internal function used before every attempt |
+| `AppAttestDeviceError.challengeMissing` | Server says challenge invalid/replayed |
+| `AppAttestDeviceError.credentialMissing` | Server says credential not found for keyID |
 
-## Consumers
+## Step-by-step client integration
 
-The host application supplies the concrete network transport:
+### 1. Create transport
 
 ```swift
 import AppAttestDevice
@@ -44,52 +52,88 @@ let client = Client(
 )
 ```
 
-The host target, not this package, depends on `swift-openapi-urlsession`. Generated `Client` is supplied by the host's OpenAPI target.
+Pass the same `routePrefix` as the server if it is customized.
 
-## Endpoints
+### 2. First call and automatic registration
 
-The transport calls service routes directly through its base transport:
+On first protected request:
 
-| Method and path | When |
-|---|---|
-| `POST /app-attest/challenge` | Initial registration and every protected attempt |
-| `POST /app-attest/attestation` | No accepted key exists in Keychain |
+1. `send` acquires the actor gate, so only one protected call can sign at a time.
+2. It calls `ensureRegistered`.
+3. `ensureRegistered` reads `keyID` from Keychain.
+4. If absent, it:
+   - requests `/app-attest/challenge`,
+   - calls `DCAppAttestService.attestKey(keyID, SHA256(challenge))`,
+   - posts attestation to `/app-attest/attestation`,
+   - stores `keyID` in Keychain only after `204`.
 
-Service calls bypass `AppAttestTransport.send` recursion.
+### 3. Signing a protected call
 
-## Request shape
+For a protected request:
 
-- Initial attestation: generated `keyID`, 32-byte challenge, attestation object.
-- Protected request client data: format byte `0x01`, length-prefixed challenge/method/path-query, SHA-256 body digest.
-- Protected headers: key ID, challenge, assertion; other headers are not signed in v1.
-- Nil bodies sign an empty digest; non-nil bodies are collected and rebuilt unchanged.
+1. Request body is collected to memory (empty payload becomes empty `Data()`).
+2. A fresh challenge is requested via `/app-attest/challenge`.
+3. Canonical request data is built with:
+   - format version,
+   - challenge,
+   - HTTP method,
+   - path and query (`request.url.string`),
+   - SHA-256 body.
+4. `DCAppAttestService.generateAssertion` signs the hash.
+5. Transport sends request with headers:
+   - `X-App-Attest-Key-ID`
+   - `X-App-Attest-Challenge`
+   - `X-App-Attest-Assertion`
 
-## Response shape
+### 4. Error inspection and bounded retry
 
-- Successful registration: `204`; only then is `keyID` written to Keychain.
-- Protected response: passed through from base transport.
-- Inspected error bodies are buffered and rebuilt before return.
+`inspect` parses error responses before returning:
 
-## Constraints
+- `401` + `app_attest_challenge_missing` -> retry once with fresh challenge/assertion.
+- `401` + `app_attest_credential_missing` -> delete local key, re-run registration, retry once.
+- Any other `401/403/400` -> no transport retry.
+- `503` or transport failures in registration are surfaced to caller; local key is preserved unless explicitly deleted by credential-missing recovery.
 
-- iOS 26+: runtime App Attest support determined by `DCAppAttestService.isSupported`.
-- macOS 26: package compiles, but Apple App Attest support begins with macOS 27 -> `.unsupported`, no protected network request.
-- Exactly one protected request in flight per transport actor; no parallel assertions.
-- Request bodies buffered in memory; streaming uploads unsupported.
-- Keychain stores only `keyID`; no user ID, public key, counter, receipt, or fraud assessment.
-- No `bundleVersion`, `validationCategory`, or other iOS/macOS 27-only validation.
+The retry counter is one; each failure path resets `stage` and re-evaluates through registration if needed.
 
-## Failures
+## Endpoints used by the transport
 
-| Condition | Behavior |
-|---|---|
-| `app_attest_challenge_missing` | Fresh challenge/assertion; retry original request once |
-| `app_attest_credential_missing` | Delete Keychain key; generate/register new key; retry once |
-| `403 app_attest_invalid` | Return response; preserve key; no retry |
-| `503 app_attest_unavailable` | Return response; preserve key; no retry |
-| Keychain or DeviceCheck failure | Throw locally; no automatic retry |
+| Method and path | Purpose | Called from |
+|---|---|---|
+| `POST /app-attest/challenge` | Issue challenge | Registration and every protected send |
+| `POST /app-attest/attestation` | Initial attestation exchange | Registration only |
 
-If fresh attestation fails after `credential_missing`, the deleted old key remains absent and a new key is not persisted.
+Challenge/attestation calls are made through the same base transport but outside `send` recursion (service helper methods bypass `send` wrapper path).
+
+## Error types
+
+| Error | Meaning | Next behavior |
+|---|---|---|
+| `unsupported` | Device does not support App Attest | no retry |
+| `challengeMissing` | server reported missing/expired/replayed challenge | recoverable: retry once |
+| `credentialMissing` | server has no credential for keyID | recoverable: delete key + re-register |
+| `invalidResponse` | malformed server payload | local throw |
+| `registrationFailed` | attestation endpoint returned non-success | local throw |
+
+## Constraint notes
+
+- `iOS 26+`: runtime support check is dynamic.
+- `macOS 26`: compiles, but protected requests may return `unsupported`.
+- No parallel protected send by design; serialization avoids counter reorder races.
+- `KeyChain` stores only `keyID`; no user data or public key.
+- Streaming upload requests are not supported because request bodies are collected.
+
+## Request/response payloads
+
+- Attestation payload to client service:
+  - key ID
+  - base64 challenge
+  - base64 attestation object
+- Protected request metadata:
+  - key ID + challenge + assertion in headers
+- Protected response:
+  - normal OpenAPI result is returned on success
+  - on guarded errors, response body may be replayed after buffering
 
 ## Related
 

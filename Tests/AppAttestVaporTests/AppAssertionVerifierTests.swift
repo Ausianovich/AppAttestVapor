@@ -52,6 +52,42 @@ func logsMalformedAssertionStage() {
 }
 
 @Test
+func logsMalformedAuthenticatorDataShape() {
+    let logs = TestLogRecorder()
+    let verifier = AppAssertionVerifier(
+        configuration: assertionConfiguration,
+        logger: logs.logger
+    )
+    let authenticatorData = Data(repeating: 0x11, count: 32)
+        + Data([0x81, 0x00, 0x00, 0x00, 0x05, 0xFF])
+    let assertion = Data(
+        [0xA2]
+            + cborText("signature")
+            + cborBytes(Data([0x30, 0x00]))
+            + cborText("authenticatorData")
+            + cborBytes(authenticatorData)
+    )
+
+    #expect(throws: AppAssertionError.invalidAssertion) {
+        try verifier.verify(
+            assertionObject: assertion,
+            publicKey: fixedPrivateKey.publicKey.x963Representation,
+            clientData: clientData,
+            storedCounter: 4
+        )
+    }
+    #expect(
+        logs.entries.contains {
+            $0.level == .error
+                && $0.metadata["stage"] == "assertion-authenticator-data"
+                && $0.metadata["authenticator_data_length"] == "38"
+                && $0.metadata["authenticator_data_flags"] == "129"
+                && $0.metadata["authenticator_data_trailing_bytes"] == "1"
+        }
+    )
+}
+
+@Test
 func rejectsMalformedDERSignature() throws {
     #expect(throws: AppAssertionError.invalidAssertion) {
         try verifier.verify(

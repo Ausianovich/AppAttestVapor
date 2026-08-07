@@ -3,60 +3,70 @@ title: AppAttestVapor API
 type: api
 status: active
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-07
 tags: [api, security, vapor]
 keywords: [AppAttestVapor, AppAttestConfiguration, AppAttestMiddleware, AppAttestCredentialClient, prepareDependencies, VaporTransport, VaporValkey, ValkeyClient, advanceCounter, app_attest_unavailable]
 related: [app_attest_integration.md]
 ---
 
 ## TL;DR
-Vapor service routes register directly on `Application`; `AppAttestMiddleware` protects only selected route groups.
-Read when: configuring a Vapor host | connecting Valkey or PostgreSQL | protecting generated OpenAPI handlers
+Vapor service routes are registered directly on `Application`; `AppAttestMiddleware` protects only selected route groups.
+Use this page before you wire OpenAPI handlers or deploy a production host.
 
 ## Summary
-`AppAttestVapor` owns challenge issuance, initial attestation verification, and per-request assertion verification. Valkey stores only 60-second challenges; the host supplies durable public-key and counter operations through `AppAttestCredentialClient`. Service routes remain outside protected groups to avoid middleware recursion. Invalid requests never reach protected handlers.
+`AppAttestVapor` provides challenge issuance, initial attestation verification, and protected-route assertion verification.
+Valkey stores only one short-lived challenge per `keyID` (`60` seconds default).  
+The host supplies durable credential persistence through `AppAttestCredentialClient`.
 
----
-
-## Quick ref
+## Quick reference
 
 | API | Contract |
 |---|---|
-| `app.appAttest.configure(configuration)` | Stores configuration and registers both service routes |
-| `AppAttestMiddleware()` | Verifies App Attest headers before calling downstream handler |
+| `app.appAttest.configure(configuration)` | Stores configuration and registers both service routes on application root |
+| `AppAttestMiddleware()` | Verifies key ID, challenge, and assertion before calling handler |
+| `app.appAttest` | Lazily exposes `AppAttest` config helper on `Application` |
 | `AppAttestConfiguration` | Team ID, Bundle ID, environment, route prefix, challenge TTL |
-| `DependencyValues.appAttestCredential` | Four host-owned durable credential closures |
-| `prepareDependencies` | Public startup function from Point-Free `Dependencies`; installs host implementation before first request |
+| `DependencyValues.appAttestCredential` | Host credential persistence contract |
+| `prepareDependencies { ... }` | Point-Free startup function to install concrete credential client |
 
-Defaults: route prefix `/app-attest`; challenge TTL `60` seconds.
+## Step-by-step server integration
 
-## Consumers
+### 1. Prepare startup dependencies
 
-Complete empty-server integration, including package dependencies, Fluent model, migration, concrete credential client, configuration, routes, and validation: [AppAttestVapor server integration](../runbooks/vapor_server_integration.md).
+1. Configure PostgreSQL or your durable DB access.
+2. Add and initialize Valkey.
+3. Install `AppAttestCredentialClient` into `Dependencies`.
+4. Call `app.appAttest.configure(...)`.
+5. Register regular routes and OpenAPI handlers afterward.
 
-`prepareDependencies` does not come from Vapor or `AppAttestVapor`. Host target imports it from the Point-Free package `swift-dependencies`:
+### 2. Ensure correct package modules are available
 
 ```swift
 // Package.swift
 dependencies: [
-    .package(
-        url: "https://github.com/pointfreeco/swift-dependencies",
-        from: "1.14.1"
-    ),
+    .package(url: "https://github.com/vapor/vapor.git", from: "4.121.4"),
+    .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.14.1"),
+    .package(path: "../AppAttestVapor"),
+    // ...
 ]
 
 .executableTarget(
     name: "App",
     dependencies: [
-        .product(
-            name: "Dependencies",
-            package: "swift-dependencies"
-        ),
+        .product(name: "AppAttestVapor", package: "appattestvapor"),
+        .product(name: "Dependencies", package: "swift-dependencies"),
+        .product(name: "Fluent", package: "fluent"),
+        .product(name: "FluentPostgresDriver", package: "fluent-postgres-driver"),
+        .product(name: "SQLKit", package: "sql-kit"),
+        .product(name: "Valkey", package: "valkey-swift"),
+        .product(name: "Vapor", package: "vapor"),
+        .product(name: "VaporValkey", package: "valkey"),
+        .product(name: "Valkey", package: "valkey-swift"),
     ]
 )
 ```
 
-After implementing `AppAttestCredentialClient.database(_:)`, configure every dependency inside the server's existing `configure(_:)` function:
+### 3. Install credential client before first request
 
 ```swift
 import AppAttestVapor
@@ -68,10 +78,7 @@ import Vapor
 import VaporValkey
 
 func configure(_ app: Application) async throws {
-    let databaseURL = Environment.get("DATABASE_URL")
-        ?? "postgres://postgres:postgres@127.0.0.1:5432/app_attest"
-
-    app.databases.use(try .postgres(url: databaseURL), as: .psql)
+    app.databases.use(try .postgres(url: "postgres://postgres:postgres@127.0.0.1:5432/app_attest"), as: .psql)
     app.migrations.add(CreateAppAttestCredential())
 
     app.valkey = ValkeyClient(
@@ -80,18 +87,19 @@ func configure(_ app: Application) async throws {
         logger: app.logger
     )
 
-    // `prepareDependencies` comes from `import Dependencies`.
+    // prepareDependencies comes from swift-dependencies
     prepareDependencies {
-        // `appAttestCredential` is exposed by AppAttestVapor.
-        // `.database(app.db)` is the host implementation from the runbook.
+        // Host concrete credential client; expects host-provided DB handle.
         $0.appAttestCredential = .database(app.db)
     }
 
     app.appAttest.configure(
         AppAttestConfiguration(
-            teamID: "TEAMID",
+            teamID: "YOUR_TEAM_ID",
             bundleID: "com.example.app",
-            environment: .production
+            environment: .production,
+            routePrefix: "/app-attest",
+            challengeTTL: 60
         )
     )
 
@@ -99,92 +107,116 @@ func configure(_ app: Application) async throws {
 }
 ```
 
-Origin of each non-local symbol:
+`prepareDependencies` is shared process state and should be called once in startup.
 
-| Symbol | Defined by | Created or called where |
-|---|---|---|
-| `prepareDependencies` | Product `Dependencies` from `swift-dependencies` | Called once in `configure(_:)` |
-| `$0.appAttestCredential` | `AppAttestVapor` extension on `DependencyValues` | Assigned inside `prepareDependencies` |
-| `app.db` | Fluent | Available after `app.databases.use(...)` |
-| `.database(app.db)` | Host extension implemented in runbook | Creates concrete `AppAttestCredentialClient` |
+### 4. Register middleware only on protected routes
 
-`prepareDependencies` changes the process-wide dependency value for the application lifetime. Call it once during startup, before App Attest routes or middleware can access `appAttestCredential`.
+```swift
+let protected = app.grouped(AppAttestMiddleware())
+protected.post("private", ":id") { req in
+    "ok"
+}
+```
 
-Protect generated OpenAPI handlers by passing the grouped routes to the host-owned `VaporTransport`:
+Service endpoints remain outside `protected`:
+
+```swift
+app.get("health") { _ in "OK" }
+```
+
+### 5. Register OpenAPI handlers against protected transport
 
 ```swift
 import OpenAPIVapor
 
-let protectedRoutes = app.grouped(AppAttestMiddleware())
-let transport = VaporTransport(routesBuilder: protectedRoutes)
-try Handler().registerHandlers(
-    on: transport,
-    serverURL: URL(string: "/api")!
-)
+let transport = VaporTransport(routesBuilder: protected)
+try Handler().registerHandlers(on: transport, serverURL: URL(string: "/api")!)
 ```
 
-The host target, not this package, depends on `swift-openapi-vapor`.
+## Endpoint behavior
 
-## Endpoints
-
-| Method and path | Success | Purpose |
+| Method and path | Success | Meaning |
 |---|---|---|
-| `POST /app-attest/challenge` | `200` JSON | Issues and stores one challenge for `keyID` |
-| `POST /app-attest/attestation` | `204` | Verifies initial attestation and saves credential |
+| `POST /app-attest/challenge` | `200` | Creates/stores challenge for `keyID` |
+| `POST /app-attest/attestation` | `204` | Verifies attestation and saves credential |
 
-Changing `routePrefix` changes both paths. Register these routes with `configure` before creating protected route groups.
+`routePrefix` changes both paths. Keep prefix equal to the same value passed to client `AppAttestTransport`.
 
-## Request shape
+## Request and response bodies
 
-- Challenge: `{"keyID":"<base64-32-bytes>"}`.
-- Attestation: `{"keyID":"…","challenge":"…","attestationObject":"…"}`.
-- Protected requests: `X-App-Attest-Key-ID`, `X-App-Attest-Challenge`, `X-App-Attest-Assertion`.
+- Challenge request: `{"keyID":"<base64-32-bytes>"}`
+- Challenge response: `{"challenge":"<base64-32-bytes>"}`
+- Attestation request:
+  - `{"keyID":"...","challenge":"...","attestationObject":"..."}`
+- Error response: `{"code":"<stable-code>"}`
 
-## Response shape
+## Server side verification stages
 
-- Challenge: `{"challenge":"<base64-32-bytes>"}`.
-- Errors: `{"code":"<stable-code>"}`.
+### Challenge endpoint
+1. Decode and validate `keyID` (`Data(base64Encoded: keyID)?.count == 32`).
+2. Ask `appAttestChallengeDriver.issue` for signed challenge value.
+3. Persist to Valkey with TTL.
+4. Return challenge response.
 
-| Code | HTTP | Client action |
-|---|---:|---|
-| `app_attest_challenge_missing` | 401 | Recreate challenge/assertion once |
-| `app_attest_credential_missing` | 401 | Delete local key, register a new key, retry once |
-| `app_attest_invalid` | 400 or 403 | Do not retry |
-| `app_attest_unavailable` | 503 | Preserve local key; do not retry |
+### Attestation endpoint
+1. Decode attestation request and validate payload shape.
+2. Load challenge and compare it exactly.
+3. Run `AppAttestationVerifier` (certificate chain + Apple root checks + challenge binding).
+4. Delete challenge using atomic delete semantics.
+5. Save credential (`keyID`, public key, initial counter).
 
-## Constraints
+### Middleware endpoint check
+1. Validate request headers and base64 shape.
+2. Read and delete challenge from Valkey.
+3. Resolve public key + counter from `appAttestCredential`.
+4. Rebuild signed data and verify assertion.
+5. Atomically advance monotonic counter.
+6. Invoke next handler only when all checks succeed.
 
-Credential closures use `keyID` only:
+## Error handling
+
+| Condition | HTTP | Error code | Retry |
+|---|---:|---|---|
+| Missing challenge payload | 401 | `app_attest_challenge_missing` | Transport retries once |
+| Missing credential | 401 | `app_attest_credential_missing` | Transport deletes local key and re-attests once |
+| Invalid proof / signature / env / replay | 400 or 403 | `app_attest_invalid` | No retry |
+| Storage/dependency issue | 503 | `app_attest_unavailable` | No retry |
+
+`DEL` returning `0` is treated as replay/race and mapped to invalid proof.
+
+## Storage contract
+
+`AppAttestCredentialClient` must be implemented only with `keyID`, never with user identifiers.
 
 ```sql
--- saveCredential: insert-only; key_id has a unique/primary-key constraint
+-- Save: insert-only saveCredential; key_id is unique/primary-key.
 INSERT INTO app_attest_credentials (key_id, public_key, counter)
 VALUES ($1, $2, $3);
 
+-- Read:
 SELECT public_key FROM app_attest_credentials WHERE key_id = $1;
 SELECT counter FROM app_attest_credentials WHERE key_id = $1;
 
--- advanceCounter returns true only when this statement returns one row
+-- Advance (one atomic statement):
 UPDATE app_attest_credentials
 SET counter = $2
 WHERE key_id = $1 AND counter < $2
 RETURNING counter;
 ```
 
-- Public key and counter must survive Vapor/Valkey redeploys.
-- Valkey stores `app-attest:challenge:<keyID>` with `SETEX`; it never stores credentials.
-- No Fluent model or PostgreSQL schema is provided by this package.
-- TLS and application-level authentication remain required.
+Use the same row and data types for server restarts and crash recovery.
 
-## Failures
+## Constraints
 
-- Missing credential implementation -> `503 app_attest_unavailable`.
-- Valkey/durable-store error -> `503`; protected handler not called.
-- Invalid, replayed, or stale assertion -> `403`; protected handler not called.
-- Challenge expiry/deletion -> recoverable `401`; client retry remains bounded to one.
+- Credential storage must be durable and survive app/container restarts.
+- Valkey must only store ephemeral challenge data.
+- No middleware recursion on `/app-attest/*`.
+- `routePrefix` must match both host and client.
+- No user IDs are stored by this package.
 
 ## Related
 
-- [AppAttestVapor server integration](../runbooks/vapor_server_integration.md)
+- [AppAttestVapor API](../api/app_attest_vapor.md)
 - [App Attest integration](../architecture/app_attest_integration.md)
 - [AppAttestDevice API](app_attest_device.md)
+- [AppAttestVapor server integration](../runbooks/vapor_server_integration.md)

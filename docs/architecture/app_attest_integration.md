@@ -3,132 +3,191 @@ title: App Attest Integration
 type: architecture
 status: active
 created: 2026-08-05
-updated: 2026-08-06
+updated: 2026-08-07
 tags: [architecture, security]
 keywords: [AppAttestVapor, AppAttestDevice, AppAttestTransport, AppAttestMiddleware, VaporValkey, ClientTransport, DCAppAttestService, keyID, challenge, assertion, attestation]
 related: []
 ---
 
 ## TL;DR
-Reusable App Attest protection for OpenAPI clients and Vapor servers, with Valkey challenges and host-owned durable credentials.
-Read when: implementing AppAttestDevice/AppAttestVapor | changing signed-request format | integrating OpenAPI or credential storage
+App Attest protects selected OpenAPI routes with per-request signed proofs. The client proves possession of a valid, non-revoked App Attest key; the server verifies challenge freshness, signature, counter monotonicity, and application identity before running protected handlers.
+
+Read when: implementing AppAttestDevice/AppAttestVapor | changing request signing contract | onboarding a new team into App Attest integration.
 
 ## Summary
-`AppAttestDevice` wraps any Swift OpenAPI `ClientTransport`, performs initial attestation, and adds an assertion to each protected request. `AppAttestVapor` registers attestation routes and exposes middleware for selected Vapor route groups, including groups used by `VaporTransport`. Valkey stores short-lived challenges; a Point-Free dependency implemented by the host server stores public keys and counters durably. The package implements Apple attestation and assertion verification directly instead of depending on a third-party App Attest verifier.
+`AppAttestDevice` wraps any Swift OpenAPI `ClientTransport`, performs initial attestation, and adds signed proof headers to protected requests. `AppAttestVapor` provides service endpoints and middleware to verify those proofs.  
+Valkey stores only short-lived challenges.  
+Durable credentials (`publicKey`, `counter`) are host-owned and stored through `AppAttestCredentialClient`.
 
----
+## What each side is responsible for
+
+- Client side:
+  - Creates and stores a `keyID` in Keychain only after server accepts attestation.
+  - Requests challenges and attests keys when needed.
+  - Builds canonical client data and generates assertions for every protected request.
+  - Performs bounded recovery on server recoverable codes (`app_attest_challenge_missing`, `app_attest_credential_missing`).
+- Server side:
+  - Issues one challenge per `keyID` request with short TTL.
+  - Verifies attestation object, then persists `(keyID, publicKey, counter)` once.
+  - Verifies each protected request proof and rejects everything that is stale, malformed, replayed, or mismatched.
+  - Manages challenge and counter replay resistance by delete-first persistence checks.
+- Infrastructure side:
+  - Provides trustworthy TLS, app authentication, and runtime services (Valkey + durable DB).
+  - Must keep challenge TTL short and credential storage durable.
+
+## Integration flow at a glance
+
+### Phase 1: registration flow
+1. Transport checks `DCAppAttestService.isSupported`.
+2. Transport reads `keyID` from Keychain.
+3. If missing, transport generates a key and asks server for a challenge.
+4. Transport calls Apple attestation with `SHA256(challenge)` and sends `keyID`, `challenge`, and attestation object to `/app-attest/attestation`.
+5. Server checks:
+   - challenge format + challenge match with Valkey state,
+   - challenge deletion succeeds exactly once,
+   - Apple attestation chain, challenge binding, App ID, environment, key ID, and initial counter.
+6. Server stores the credential and returns `204`.
+7. Transport writes `keyID` to Keychain and retries the original request path.
+
+### Phase 2: protected request flow
+1. Transport buffers request body in memory.
+2. Transport asks for a new challenge for that `keyID`.
+3. Transport computes client data (`version`, `challenge`, method, path+query, body hash).
+4. Transport signs data and sends three headers:
+   - `X-App-Attest-Key-ID`
+   - `X-App-Attest-Challenge`
+   - `X-App-Attest-Assertion`
+5. Middleware checks required headers and challenge shape.
+6. Middleware reads `challenge(keyID)` from Valkey and deletes it immediately.
+7. Middleware loads `publicKey` and `counter`, reconstructs client data, and verifies assertion signature.
+8. Middleware atomically advances the counter (`newValue > stored`) and only then calls protected handler.
 
 ## Scope
 
-- Device platforms: iOS 26+, macOS 26+; App Attest requests fail locally when `DCAppAttestService.isSupported == false`.
-- macOS 26 compiles but does not perform protected requests; current Apple support begins with macOS 27.
-- Server platforms: Linux and macOS.
+- Device platforms: iOS 26+, macOS 26+; `DCAppAttestService.isSupported` controls local support.
+- macOS 26 compiles but protected requests are still unsupported at runtime.
 - One configured Team ID, Bundle ID, and App Attest environment per server instance.
-- Protection applied only to explicitly grouped Vapor routes.
-- Buffered request bodies only; streaming uploads excluded.
-- One protected request in flight per `AppAttestTransport`; parallel requests excluded.
-- `validationCategory`, `bundleVersion`, receipt storage, and fraud assessment excluded.
+- Protection applies only to explicitly selected Vapor route groups.
+- Request bodies are buffered; streaming uploads are unsupported.
+- One protected request in flight per `AppAttestTransport` actor.
+- `validationCategory`, `bundleVersion`, App Attest receipts, and iOS 27+ fraud checks are intentionally excluded.
+
+## Step-by-step implementation plan
+
+### 1. Shared constants
+Configure these shared values consistently:
+
+- `teamID`
+- `bundleID`
+- environment (`.development` or `.production`)
+- `routePrefix` (default `/app-attest`)
+- `challengeTTL` (default `60`)
+
+### 2. Configure server routes and middleware order
+1. In `configure(_:)`, set up database and Valkey before protected logic.
+2. Register App Attest dependencies (`appAttestCredential`) before routes are hit.
+3. Call `app.appAttest.configure(...)` to register service endpoints.
+4. Group protected routes via `app.grouped(AppAttestMiddleware())`.
+5. Keep health and service endpoints outside this middleware.
+
+### 3. Implement durable credential operations
+Host must provide all closure operations:
+
+- `saveCredential(keyID, publicKey, initialCounter)`
+- `getPublicKey(keyID)`
+- `getCounter(keyID)`
+- `advanceCounter(keyID, newValue) -> Bool`
+
+`saveCredential` must never overwrite an existing key row.  
+`advanceCounter` must be atomic and return `true` only when it actually advanced.
+
+### 4. Configure OpenAPI transport on both sides
+- Client: `Client(transport: AppAttestTransport(base: URLSessionTransport(), routePrefix: ...))`
+- Server: register handlers using `VaporTransport(routesBuilder: app.grouped(AppAttestMiddleware()))`
+- Server services stay on ungrouped routes.
 
 ## Main elements
 
 | Element | Responsibility |
 |---|---|
-| `AppAttestCore` | Shared, versioned encoding of signed client data; no platform or framework integration |
-| `AppAttestTransport<Base: ClientTransport>` | Serializes protected requests, manages key lifecycle, obtains challenges, creates assertions, delegates network I/O to `Base` |
-| KeyChain integration | Stores `keyID` only after server accepts initial attestation |
-| `AppAttestConfiguration` | Team ID, Bundle ID, environment, service route prefix, challenge TTL; default TTL 60 seconds |
-| Service routes | `POST /app-attest/challenge` and `POST /app-attest/attestation`; prefix configurable |
-| `AppAttestMiddleware` | Verifies request assertion before invoking downstream Vapor/OpenAPI handler |
-| VaporValkey storage | Stores one library-generated active challenge per `keyID`; applies TTL; supports get/delete |
-| Credential dependency | Host-provided durable persistence for public key and monotonic counter |
-| Attestation verifier | CBOR decoding; Apple certificate-chain, nonce, App ID, environment, credential ID, key ID, and initial counter validation |
-| Assertion verifier | Signature, App ID, challenge, and monotonic counter validation |
-
-Credential dependency operations:
-
-```swift
-saveCredential(keyID, publicKey, initialCounter)
-getPublicKey(keyID)
-getCounter(keyID)
-advanceCounter(keyID, to: newValue) -> Bool
-```
-
-`advanceCounter` must atomically succeed only when `newValue` is greater than the stored value. PostgreSQL/Fluent is the expected host implementation; the package does not own a database schema.
-Concrete model, migration, SQL update, and `.database(app.db)` wiring: [AppAttestVapor server integration](../runbooks/vapor_server_integration.md).
+| `AppAttestCore` | Shared versioned signed-data encoding |
+| `AppAttestTransport<Base: ClientTransport>` | Client registration, request signing, bounded recovery |
+| Keychain store | Persists accepted `keyID` only |
+| `AppAttestConfiguration` | Team ID, Bundle ID, environment, route prefix, challenge TTL |
+| Service routes | `POST /app-attest/challenge`, `POST /app-attest/attestation` |
+| `AppAttestMiddleware` | Verifies app attestation proof before protected handler |
+| Valkey challenge driver | Stores one challenge per `keyID`, TTL-managed |
+| `AppAttestCredentialClient` | Durable host operations for public key + counter |
+| Attestation verifier | Verifies challenge binding, Apple chain, environment, credential metadata |
+| Assertion verifier | Verifies signature, counter monotonicity, and request body binding |
 
 ## Interactions
 
 ### Initial attestation
 
-1. Transport checks `isSupported` and Keychain.
-2. Missing `keyID` -> `generateKey`.
-3. Device requests challenge for generated `keyID`.
-4. Device calls `attestKey` using SHA-256 of challenge.
-5. Device posts `keyID`, challenge, and attestation object to `/app-attest/attestation`.
-6. Server loads challenge from Valkey, compares it, and deletes it; delete must report success.
-7. Server performs full agreed attestation verification.
-8. Server calls `saveCredential(keyID, publicKey, 0)`.
-9. Successful response -> device stores `keyID` in Keychain.
+1. Transport checks support and local key state.
+2. If key absent, transport requests challenge.
+3. Transport calls Apple attestation.
+4. Transport sends attestation payload to server.
+5. Server validates challenge match + challenge deletion + attestation.
+6. Server saves credential and returns `204`.
+7. Transport writes `keyID` to Keychain.
 
 ### Protected request
 
-1. Actor-isolated transport buffers body and obtains a new challenge.
-2. `AppAttestCore` encodes format version, challenge, HTTP method, path/query, and SHA-256 body hash.
-3. Device creates assertion and adds `X-App-Attest-Key-ID`, `X-App-Attest-Challenge`, and `X-App-Attest-Assertion` headers.
-4. Middleware loads and compares challenge, loads public key/counter, reconstructs signed data, and verifies assertion.
-5. Middleware deletes challenge; a zero delete count rejects concurrent replay.
-6. Middleware calls atomic `advanceCounter`; failure rejects request.
-7. Middleware invokes downstream handler only after every check succeeds.
+1. Transport buffers body and fetches fresh challenge.
+2. Transport creates canonical client data and assertion.
+3. Transport sends signed request.
+4. Middleware validates required headers and lengths.
+5. Middleware reads and deletes challenge.
+6. Middleware fetches public key and stored counter.
+7. Middleware verifies assertion and compares `request.path`/`query` + body hash.
+8. Middleware advances counter using atomic compare-and-set.
+9. Middleware runs protected handler only if all checks pass.
 
-### OpenAPI integration
+## OpenAPI integration
 
-- Device: generated `Client` receives `AppAttestTransport(base: URLSessionTransport(), ...)` as its `ClientTransport`.
-- Server: `VaporTransport` receives `app.grouped(AppAttestMiddleware())` as its `RoutesBuilder`.
-- `/app-attest/*` routes register directly on `Application`, outside protected group -> no middleware recursion.
-- Concrete OpenAPI transports remain host dependencies; this package depends only on `OpenAPIRuntime`.
+- Client side: generated client uses `AppAttestTransport`.
+- Server side: generated handlers register on `VaporTransport(routesBuilder: app.grouped(AppAttestMiddleware()))`.
+- Do not place service routes behind middleware.
+- Route prefix must be byte-for-byte equal between service client and configuration.
+
+## Request/response behavior
+
+| Condition | Client behavior | Server HTTP status | Server code |
+|---|---|---|---|
+| No local support | Local typed error | - | - |
+| Missing/expired challenge | Retry once | `401` | `app_attest_challenge_missing` |
+| Credential missing | Delete Keychain key, re-register once | `401` | `app_attest_credential_missing` |
+| Invalid signature/shape/env/counter | Return without retry | `400` or `403` | `app_attest_invalid` |
+| Infrastructure error | Return no retry, preserve local key | `503` | `app_attest_unavailable` |
 
 ## Constraints
 
-- Missing, malformed, expired, replayed, or unverifiable App Attest data fails closed on server.
-- `isSupported == false`, Keychain failure, or DeviceCheck failure -> no protected network request.
-- TLS remains required; App Attest does not replace transport security or user authentication.
-- Credential storage must survive Vapor and Valkey redeploys.
-- Valkey challenge deletion must be observable (`DEL` result) to reject concurrent replay.
-- Canonical signed-data format must be identical across device/server and versioned before release.
-- No GCD; concurrency uses async/await and actor isolation.
+- Missing, malformed, expired, replayed, or unverifiable App Attest data fails closed.
+- TLS and regular auth remain required.
+- Credential storage must survive app and challenge store restarts.
+- Valkey deletion (`DEL`) is part of anti-replay protection.
+- Signed-data format is versioned and must remain synchronized across device and server packages.
+- Concurrency model is sequential for protected transport calls.
 
 ## Trade-offs
 
-- Sequential transport prevents counter reordering but limits protected-request concurrency.
-- One active challenge per `keyID` matches sequential transport but cannot support future parallel sends.
-- Direct verifier avoids an unversioned third-party security library but requires comprehensive cryptographic fixtures.
-- Host-owned credential persistence preserves database choice but requires four dependency closures.
-- Saving `keyID` only after server acceptance avoids extra lifecycle state; interruption may leave an unreachable generated key.
-- Ignoring iOS/macOS 27 validation extensions keeps v1 scoped to requested checks but omits those newer risk signals.
+- Sequential transport lowers concurrency complexity and preserves counter ordering.
+- Single active challenge per `keyID` matches current transport contract.
+- Direct verifier avoids external verification dependency but requires explicit crypto-level coverage.
+- Host-owned credential storage decouples persistence and database choice.
+- Storing only `keyID` in Keychain lowers mobile secret surface.
 
-## Error handling
+## Verification coverage
 
-| Condition | Result |
-|---|---|
-| Unsupported device or local preparation failure | Local typed error; base transport not called |
-| Missing/expired challenge | Machine-readable recoverable error; transport retries preparation once |
-| Credential not found | Transport removes local `keyID`, performs fresh attestation, retries request once |
-| Invalid signature, App ID, environment, or counter | `403`; no retry; handler not called |
-| Valkey or credential dependency unavailable | `503`; preserve local key; no automatic re-attestation |
-
-Server errors use a short JSON body with stable `code`; status and code distinguish recovery from cryptographic rejection.
-
-## Verification
-
-- Shared signed-data vectors consumed by device and server tests.
-- Attestation fixtures cover success and failures for chain, nonce, App ID, environment, credential ID, key ID, and counter.
-- Assertion fixtures cover signature, challenge, App ID, replay, and monotonic counter.
-- Vapor tests prove protected handler is unreachable on failure.
-- Transport tests use fake DeviceCheck, Keychain, and base transport for registration, assertion, recovery, serialization, and no-network failures.
-- Automated tests make no live Apple requests.
+- Shared fixtures and verification logic are split by phase:
+  - Attestation success/failure (certificate, nonce, App ID, environment, key IDs)
+  - Assertion success/failure (challenge, method/path/body/hash, signature, replay)
+  - Route tests validate middleware blocks invalid signed paths.
 
 ## Related
 
+- [AppAttestVapor API](app_attest_vapor.md)
+- [AppAttestDevice API](app_attest_device.md)
 - [AppAttestVapor server integration](../runbooks/vapor_server_integration.md)
-- [AppAttestVapor API](../api/app_attest_vapor.md)
-- [AppAttestDevice API](../api/app_attest_device.md)

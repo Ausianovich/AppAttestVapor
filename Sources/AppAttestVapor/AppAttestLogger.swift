@@ -11,11 +11,15 @@ extension Logger {
         )
     }
 
-    func appAttestError(stage: String, error: (any Error)? = nil) {
-        var metadata: Logger.Metadata = [
+    func appAttestError(
+        stage: String,
+        error: (any Error)? = nil,
+        metadata additionalMetadata: Logger.Metadata = [:]
+    ) {
+        var metadata: Logger.Metadata = additionalMetadata.merging([
             "component": "app-attest",
             "stage": "\(stage)",
-        ]
+        ]) { _, value in value }
         if let error {
             metadata["error_type"] = "\(String(reflecting: type(of: error)))"
         }

@@ -1,46 +1,78 @@
-@Tutorial(time: 35) {
+@Tutorial(time: 45) {
     @Intro(title: "Integrate AppAttestVapor into an empty Vapor server") {
-        Build a complete server integration with PostgreSQL-backed credentials, Valkey-backed challenges, and middleware-protected routes.
+        Build a complete server integration and understand exactly what executes for both registration and every protected request.
     }
 
-    @Section(title: "Add the server dependencies") {
+    @Section(title: "What App Attest integration checks in practice") {
         @ContentAndMedia {
-            Start with an empty executable target named `App`. The finished target contains `entrypoint.swift`, `configure.swift`, `routes.swift`, a Fluent model and migration, and the credential-client implementation.
+            Every protected request passes two separate security stages.  
+            Stage one creates a durable credential after one successful attestation.  
+            Stage two verifies fresh challenge, valid signature, correct `keyID`, and monotonic counter for each request.
         }
 
         @Steps {
             @Step {
-                Add Vapor, this package, Fluent/PostgreSQL, SQLKit, Dependencies, and VaporValkey to the package manifest. The example uses a local checkout of `AppAttestVapor`; replace the path with the package URL and version when consuming a release. Change the target name if your executable is not named `App`.
+                Understand the runtime roles:
+
+                - Client: `AppAttestTransport` owns key generation, Keychain `keyID`, and proof generation.
+                - Server: `AppAttestRoutes` owns challenge storage and proof verification entrypoints.
+                - Middleware: `AppAttestMiddleware` guards only protected routes.
+
+                The same `routePrefix` is required on both sides.
+            }
+            @Step {
+                Verify one request lifecycle:
+
+                1. Client gets `POST /app-attest/challenge`.
+                2. Client signs and calls `POST /app-attest/attestation` once per key.
+                3. Server saves `(keyID, publicKey, counter)` and deletes challenge.
+                4. Every protected request gets a new challenge and an assertion header set.
+                5. Middleware verifies challenge freshness, signature, and counter monotonicity.
+            }
+        }
+    }
+
+    @Section(title: "Add the server dependencies") {
+        @ContentAndMedia {
+            Start with an empty executable target named `App`. The finished target contains `entrypoint.swift`, `configure.swift`, `routes.swift`, and durable credential artifacts.
+        }
+
+        @Steps {
+            @Step {
+                Add Vapor, this package, Fluent/PostgreSQL, SQLKit, Dependencies, and VaporValkey to the package manifest.
+                The example uses local checkout path for this repository.
 
                 @Code(name: "Package.swift", file: "ServerPackage.swift", reset: true)
             }
-
             @Step {
-                Add the standard asynchronous Vapor entry point. It creates `app`, passes it to `configure`, executes the server, and shuts it down cleanly.
+                Add the standard asynchronous Vapor entry point.
 
                 @Code(name: "entrypoint.swift", file: "Entrypoint.swift", reset: true)
             }
-
             @Step {
-                Start PostgreSQL and Valkey. For local development, create a PostgreSQL database named `app_attest`, use the URL `postgres://postgres:postgres@127.0.0.1:5432/app_attest`, and expose Valkey on `127.0.0.1:6379`.
+                Start PostgreSQL and Valkey.
+                For local development use:
+
+                - PostgreSQL database `app_attest`, URL `postgres://postgres:postgres@127.0.0.1:5432/app_attest`
+                - Valkey exposed on `127.0.0.1:6379`.
             }
         }
     }
 
     @Section(title: "Create durable credential storage") {
         @ContentAndMedia {
-            App Attest identifies a credential by its Base64 `keyID`. PostgreSQL stores the public key and counter across server restarts; Valkey is not used for these values.
+            Server-side credential storage must be durable and keyed by Base64 `keyID`.
+            `public_key` and `counter` survive process restarts, unlike Valkey challenges.
         }
 
         @Steps {
             @Step {
-                Add a Fluent model. It stores the `UInt32` App Attest counter as PostgreSQL `BIGINT`, because PostgreSQL has no unsigned integer type.
+                Add a Fluent model. `counter` is stored as PostgreSQL `BIGINT`, which safely contains `UInt32`.
 
                 @Code(name: "AppAttestCredential.swift", file: "AppAttestCredential.swift", reset: true)
             }
-
             @Step {
-                Add the migration. The user-generated `keyID` is the primary key, so a second insert cannot overwrite an existing credential.
+                Add a migration. `key_id` as user id makes attestation idempotent and protects against accidental overwrite.
 
                 @Code(name: "CreateAppAttestCredential.swift", file: "CreateAppAttestCredential.swift", reset: true)
             }
@@ -49,84 +81,103 @@
 
     @Section(title: "Implement the credential client") {
         @ContentAndMedia {
-            ``AppAttestCredentialClient`` is the persistence interface used by the library. The `database` argument below is Fluent's real database handle. It will be supplied as `app.db` during configuration; there is no undeclared `credentials` object to find or create.
+            `AppAttestCredentialClient` is the single persistence contract used by the library.
+            The static factory below captures `app.db` once and implements all four required closure behaviors.
         }
 
         @Steps {
             @Step {
-                Add a static factory that receives Fluent's database handle and implements all four required operations.
+                Add a static `.database(_:)` that saves and reads by `keyID` only.
 
                 @Code(name: "AppAttestCredentialClient+Database.swift", file: "AppAttestCredentialClient+Database.swift", reset: true)
             }
-
             @Step {
-                Follow what each closure does. `saveCredential` inserts the public key after successful attestation. `getPublicKey` and `getCounter` load it for middleware verification. `advanceCounter` uses one conditional `UPDATE … RETURNING`; it returns `true` only when PostgreSQL advanced the counter, which rejects concurrent replay.
-                
-                @Code(name: "AppAttestCredentialClient+Database.swift", file: "AppAttestCredentialClient+Database.swift", reset: true)
+                Implement `advanceCounter` as one conditional `UPDATE ... RETURNING`.
+                It must return `true` only when `newValue > storedValue`.
+                This is the replay and reordering protection for all subsequent requests.
             }
         }
     }
 
-    @Section(title: "Configure the Vapor application") {
+    @Section(title: "Configure startup order and App Attest services") {
         @ContentAndMedia {
-            Configure services in dependency order: PostgreSQL, migration, Valkey, credential client, App Attest routes, then application routes.
+            Order matters because `app.db` is available only after database setup, and App Attest routes need both Valkey and credential dependencies.
         }
 
         @Steps {
             @Step {
-                Replace the empty server's `configure.swift` with the complete configuration. `app.db` comes from Fluent after `app.databases.use`; `.database(app.db)` captures that concrete database handle in the client closures.
+                Replace the server `configure` function.
+                `prepareDependencies` installs the credential closures for the process lifetime, and `app.appAttest.configure` registers both service routes.
 
                 @Code(name: "configure.swift", file: "ConfigureServer.swift", reset: true)
             }
-
             @Step {
-                Replace `YOUR_TEAM_ID` with the Team ID from the Apple Developer account and `com.example.app` with the protected application's Bundle ID. Use `.development` with the development App Attest entitlement and `.production` for production builds.
+                Check three required values before running:
+
+                - Team ID from Apple Developer account
+                - Protected app Bundle ID
+                - Environment (`.development` with development entitlement, `.production` otherwise)
             }
-
             @Step {
-                Run the migration before starting the server.
+                Run migration before accepting traffic so credential table exists for attestation writes.
 
                 @Code(name: "Terminal.sh", file: "MigrateServer.sh", reset: true)
             }
         }
     }
 
-    @Section(title: "Protect application routes") {
+    @Section(title: "Protect only business routes") {
         @ContentAndMedia {
-            `app.appAttest.configure` registers `POST /app-attest/challenge` and `POST /app-attest/attestation` directly on `Application`. Apply ``AppAttestMiddleware`` only to application routes.
+            Register service endpoints on `app`, not on middleware-wrapped groups.
+            Protect only routes that must require App Attest proofs.
         }
 
         @Steps {
             @Step {
-                Group protected routes behind the middleware. Keep health checks and the two App Attest service routes outside this group.
+                Keep service routes (`/app-attest/*`) outside protected group.
+                This prevents infinite recursion and allows clients to fetch challenges.
 
                 @Code(name: "routes.swift", file: "ServerRoutes.swift", reset: true)
             }
-
             @Step {
-                Start the server with the same PostgreSQL URL.
+                Verify behavior after launch:
+
+                - `/health` remains public
+                - `/app-attest/challenge` works without App Attest headers
+                - Protected handlers require `AppAttestMiddleware`.
+            }
+            @Step {
+                Start server using the same PostgreSQL URL as migration.
 
                 @Code(name: "Terminal.sh", file: "RunServer.sh", reset: true)
             }
         }
     }
 
-    @Section(title: "Verify the integration") {
+    @Section(title: "Validate the full flow") {
         @ContentAndMedia {
-            Verify service-route availability separately from middleware enforcement. A real device completes attestation and signs protected requests through `AppAttestDevice`.
+            Run both service-route and protected-route checks manually and then verify from a real client transport.
         }
 
         @Steps {
             @Step {
-                Post a valid 32-byte Base64 `keyID` to the unprotected challenge endpoint. Expect `200` and a Base64 challenge.
+                Call the service challenge endpoint with a dummy Base64 `keyID`.
+                Expect `200` and a Base64 challenge value.
 
                 @Code(name: "Terminal.sh", file: "VerifyChallenge.sh", reset: true)
             }
-
             @Step {
-                Call the protected route without App Attest headers. Expect `403` with `{"code":"app_attest_invalid"}`; the handler must not run.
+                Call a protected route without App Attest headers.
+                Expect `403` and `{"code":"app_attest_invalid"}`.
 
                 @Code(name: "Terminal.sh", file: "VerifyProtectedRoute.sh", reset: true)
+            }
+            @Step {
+                Integrate with `AppAttestTransport` in client app:
+
+                1. First protected request performs key generation and attestation.
+                2. Subsequent protected requests include assertion headers.
+                3. Replay/expired challenge responses trigger bounded transport recovery.
             }
         }
     }

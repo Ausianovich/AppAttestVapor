@@ -22,9 +22,18 @@ struct AppAssertionVerifier: Sendable {
         storedCounter: UInt32
     ) throws -> UInt32 {
         var stage = "assertion-object"
+        var parsingMetadata: Logger.Metadata = [:]
         do {
             let object = try AssertionObject.parse(data)
             stage = "assertion-authenticator-data"
+            parsingMetadata["authenticator_data_length"] =
+                "\(object.authenticatorData.count)"
+            parsingMetadata["authenticator_data_trailing_bytes"] =
+                "\(max(0, object.authenticatorData.count - 37))"
+            if object.authenticatorData.count > 32 {
+                parsingMetadata["authenticator_data_flags"] =
+                    "\(object.authenticatorData[32])"
+            }
             let authenticatorData = try AuthenticatorData.parseAssertion(
                 object.authenticatorData
             )
@@ -64,7 +73,13 @@ struct AppAssertionVerifier: Sendable {
 
             return authenticatorData.counter
         } catch {
-            logger?.appAttestError(stage: stage, error: error)
+            logger?.appAttestError(
+                stage: stage,
+                error: error,
+                metadata: stage == "assertion-authenticator-data"
+                    ? parsingMetadata
+                    : [:]
+            )
             throw AppAssertionError.invalidAssertion
         }
     }
