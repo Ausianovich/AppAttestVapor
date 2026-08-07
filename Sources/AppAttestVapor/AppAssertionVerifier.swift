@@ -48,7 +48,7 @@ struct AppAssertionVerifier: Sendable {
 
             var nonceInput = object.authenticatorData
             nonceInput.append(contentsOf: SHA256.hash(data: clientData))
-            let nonce = SHA256.hash(data: nonceInput)
+            let nonce = Data(SHA256.hash(data: nonceInput))
             let appID = "\(configuration.teamID).\(configuration.bundleID)"
 
             stage = "assertion-signature-verification"

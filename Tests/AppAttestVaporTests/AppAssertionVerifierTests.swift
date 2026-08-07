@@ -4,7 +4,7 @@ import Testing
 @testable import AppAttestVapor
 
 @Test
-func verifiesValidAssertionAndReturnsNewCounter() throws {
+func verifiesSyntheticAssertionSignatureOverNonceAndReturnsNewCounter() throws {
     let counter = try verifier.verify(
         assertionObject: makeAssertion(counter: 5),
         publicKey: fixedPrivateKey.publicKey.x963Representation,
@@ -185,9 +185,9 @@ private func makeAssertion(
 
     var nonceInput = authenticatorData
     nonceInput.append(contentsOf: SHA256.hash(data: clientData))
-    let signature = try signature ?? fixedPrivateKey.signature(
-        for: SHA256.hash(data: nonceInput)
-    ).derRepresentation
+    let nonce = Data(SHA256.hash(data: nonceInput))
+    let signature = try signature ?? fixedPrivateKey.signature(for: nonce)
+        .derRepresentation
 
     return Data(
         [0xA2]

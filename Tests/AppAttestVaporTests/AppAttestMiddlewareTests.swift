@@ -339,8 +339,9 @@ private func middlewareAssertion(clientData: Data, counter: UInt32) throws -> Da
 
     var nonceInput = authenticatorData
     nonceInput.append(contentsOf: SHA256.hash(data: clientData))
+    let nonce = Data(SHA256.hash(data: nonceInput))
     let signature = try middlewarePrivateKey.signature(
-        for: SHA256.hash(data: nonceInput)
+        for: nonce
     ).derRepresentation
 
     return Data(
