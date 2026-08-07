@@ -28,6 +28,30 @@ func rejectsMalformedAssertionCBOR() {
 }
 
 @Test
+func logsMalformedAssertionStage() {
+    let logs = TestLogRecorder()
+    let verifier = AppAssertionVerifier(
+        configuration: assertionConfiguration,
+        logger: logs.logger
+    )
+
+    #expect(throws: AppAssertionError.invalidAssertion) {
+        try verifier.verify(
+            assertionObject: Data([0xFF]),
+            publicKey: fixedPrivateKey.publicKey.x963Representation,
+            clientData: clientData,
+            storedCounter: 4
+        )
+    }
+    #expect(
+        logs.entries.contains {
+            $0.level == .error
+                && $0.metadata["stage"] == "assertion-object"
+        }
+    )
+}
+
+@Test
 func rejectsMalformedDERSignature() throws {
     #expect(throws: AppAssertionError.invalidAssertion) {
         try verifier.verify(

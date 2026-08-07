@@ -88,6 +88,24 @@ func attestationRouteMapsMalformedInputToForbidden() async throws {
     #expect(result.savedCredential == nil)
 }
 
+@Test
+func attestationRouteLogsMalformedRequestStage() async throws {
+    let result = try await sendAttestation(
+        payload: AttestationRequest(
+            keyID: "not-base64",
+            challenge: validChallengeString,
+            attestationObject: "not-base64"
+        )
+    )
+
+    #expect(
+        result.logs.contains {
+            $0.level == .error
+                && $0.metadata["stage"] == "attestation-request"
+        }
+    )
+}
+
 @Test(arguments: [StorageFailure.get, .delete])
 func attestationRouteMapsStorageFailureToUnavailable(
     failure: StorageFailure
@@ -175,6 +193,7 @@ private struct RouteResult: Sendable {
     let events: [RouteEvent]
     let verification: VerificationArguments?
     let savedCredential: SavedCredential?
+    let logs: [TestLogRecorder.Entry]
 }
 
 private actor RouteRecorder {
@@ -203,14 +222,15 @@ private actor RouteRecorder {
         self.error = error
     }
 
-    func result() throws -> RouteResult {
+    func result(logs: [TestLogRecorder.Entry]) throws -> RouteResult {
         guard let status else { throw TestFailure() }
         return RouteResult(
             status: status,
             error: error,
             events: events,
             verification: verification,
-            savedCredential: savedCredential
+            savedCredential: savedCredential,
+            logs: logs
         )
     }
 }
@@ -221,6 +241,7 @@ private func sendAttestation(
     routePrefix: String = "/app-attest"
 ) async throws -> RouteResult {
     let recorder = RouteRecorder()
+    let logs = TestLogRecorder()
     let payload = payload ?? AttestationRequest(
         keyID: validKeyIDString,
         challenge: validChallengeString,
@@ -242,7 +263,7 @@ private func sendAttestation(
             }
         )
         $0.appAttestationVerification = AppAttestationVerificationClient(
-            verify: { _, attestationObject, keyID, challenge in
+            verify: { _, attestationObject, keyID, challenge, _ in
                 await recorder.recordVerification(
                     VerificationArguments(
                         attestationObject: attestationObject,
@@ -270,6 +291,7 @@ private func sendAttestation(
         )
     } operation: {
         try await withApp { application in
+            application.logger = logs.logger
             application.appAttest.configure(
                 AppAttestConfiguration(
                     teamID: routeConfiguration.teamID,
@@ -291,7 +313,7 @@ private func sendAttestation(
                 )
             }
         }
-        return try await recorder.result()
+        return try await recorder.result(logs: logs.entries)
     }
 }
 
