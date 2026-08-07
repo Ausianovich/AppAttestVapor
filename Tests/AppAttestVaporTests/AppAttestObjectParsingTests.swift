@@ -44,6 +44,16 @@ func parsesAttestationAuthenticatorData() throws {
 }
 
 @Test
+func parsesVariableLengthCOSEPublicKey() throws {
+    let publicKey = [0xB8, 0x05] + Array(appleCOSEPublicKey.dropFirst())
+    let data = try AuthenticatorData.parseAttestation(
+        Data(makeAttestationAuthenticatorData(publicKey: publicKey))
+    )
+
+    #expect(data.attestedCredential?.publicKey == Data(publicKey))
+}
+
+@Test
 func parsesAssertionAuthenticatorData() throws {
     let data = try AuthenticatorData.parseAssertion(
         Data(makeAssertionAuthenticatorData(counter: 9))
@@ -66,6 +76,19 @@ func acceptsWellFormedAuthenticatorExtensions() throws {
 
     #expect(attestation.flags == 0xC1)
     #expect(assertion.flags == 0x81)
+}
+
+@Test
+func parsesAppleAuthenticatorExtensionsWithoutEDFlag() throws {
+    let extensions = cborMap([
+        ("apple_bundle_version_01", cborText("1")),
+        ("apple_validation_category_01", cborBytes([1, 0, 0, 0])),
+    ])
+    let data = try AuthenticatorData.parseAttestation(
+        Data(makeAttestationAuthenticatorData(flags: 0x40) + extensions)
+    )
+
+    #expect(data.flags == 0x40)
 }
 
 @Test
@@ -163,7 +186,8 @@ private let appleCOSEPublicKey: [UInt8] =
 
 private func makeAttestationAuthenticatorData(
     flags: UInt8 = 0x41,
-    counter: UInt32 = 7
+    counter: UInt32 = 7,
+    publicKey: [UInt8] = appleCOSEPublicKey
 ) -> [UInt8] {
     [UInt8](repeating: 0x11, count: 32)
         + [flags]
@@ -171,7 +195,7 @@ private func makeAttestationAuthenticatorData(
         + [UInt8](repeating: 0x22, count: 16)
         + [0x00, 0x03]
         + [0x31, 0x32, 0x33]
-        + appleCOSEPublicKey
+        + publicKey
 }
 
 private func makeAssertionAuthenticatorData(
@@ -224,7 +248,14 @@ private func cborArray(_ values: [[UInt8]]) -> [UInt8] {
 
 private func cborText(_ value: String) -> [UInt8] {
     let bytes = [UInt8](value.utf8)
-    return [0x60 + UInt8(bytes.count)] + bytes
+    return switch bytes.count {
+    case 0..<24:
+        [0x60 + UInt8(bytes.count)] + bytes
+    case 24...255:
+        [0x78, UInt8(bytes.count)] + bytes
+    default:
+        [0x79, UInt8(bytes.count >> 8), UInt8(bytes.count)] + bytes
+    }
 }
 
 private func cborBytes(_ value: [UInt8]) -> [UInt8] {

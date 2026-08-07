@@ -25,17 +25,14 @@ struct AuthenticatorData: Equatable, Sendable {
             var reader = ByteReader(data)
             let rpIDHash = try reader.read(32)
             let flags = try reader.readByte()
-            guard flags == 0x41 || flags == 0xC1 else {
+            guard flags & 0x40 != 0, flags & 0x3E == 0 else {
                 throw AppAttestParsingError.invalidAuthenticatorData
             }
             let counter = try reader.readUInt32()
             let aaguid = try reader.read(16)
             let credentialLength = Int(try reader.readUInt16())
             let credentialID = try reader.read(credentialLength)
-            let publicKey = try reader.read(77)
-            guard case .map = try decodeStrictCBOR(publicKey) else {
-                throw AppAttestParsingError.invalidAuthenticatorData
-            }
+            let publicKey = try reader.readCBORMap()
             try validateExtensions(flags: flags, reader: &reader)
 
             return Self(
@@ -79,8 +76,8 @@ struct AuthenticatorData: Equatable, Sendable {
         flags: UInt8,
         reader: inout ByteReader
     ) throws {
-        guard flags & 0x80 != 0 else {
-            guard reader.isAtEnd else {
+        guard !reader.isAtEnd else {
+            if flags & 0x80 != 0 {
                 throw AppAttestParsingError.invalidAuthenticatorData
             }
             return
@@ -153,8 +150,43 @@ private struct ByteReader {
             | UInt32(try readByte())
     }
 
+    mutating func readCBORMap() throws -> Data {
+        let stream = CountingCBORInputStream(bytes[index...])
+        guard case .map = try CBORDecoder(stream: stream).decodeItem() else {
+            throw AppAttestParsingError.invalidAuthenticatorData
+        }
+        return try read(stream.bytesRead)
+    }
+
     mutating func readRemaining() -> Data {
         defer { index = bytes.count }
         return Data(bytes[index...])
+    }
+}
+
+private final class CountingCBORInputStream: CBORInputStream {
+    private var bytes: ArraySlice<UInt8>
+    private(set) var bytesRead = 0
+
+    init(_ bytes: ArraySlice<UInt8>) {
+        self.bytes = bytes
+    }
+
+    func popByte() throws -> UInt8 {
+        guard let byte = bytes.popFirst() else {
+            throw CBORError.unfinishedSequence
+        }
+        bytesRead += 1
+        return byte
+    }
+
+    func popBytes(_ count: Int) throws -> ArraySlice<UInt8> {
+        guard count >= 0, bytes.count >= count else {
+            throw CBORError.unfinishedSequence
+        }
+        let result = bytes.prefix(count)
+        bytes = bytes.dropFirst(count)
+        bytesRead += count
+        return result
     }
 }
