@@ -66,6 +66,34 @@ func parsesAssertionAuthenticatorData() throws {
 }
 
 @Test
+func parsesAppleAssertionWithoutUserPresenceFlag() throws {
+    let data = try AuthenticatorData.parseAssertion(
+        Data(makeAssertionAuthenticatorData(flags: 0x00, counter: 9))
+    )
+
+    #expect(data.flags == 0x00)
+    #expect(data.counter == 9)
+}
+
+@Test
+func parsesAttestationWithoutValidatingNonStructuralFlags() throws {
+    let data = try AuthenticatorData.parseAttestation(
+        Data(makeAttestationAuthenticatorData(flags: 0x44))
+    )
+
+    #expect(data.flags == 0x44)
+}
+
+@Test
+func parsesAssertionWithoutValidatingNonStructuralFlags() throws {
+    let data = try AuthenticatorData.parseAssertion(
+        Data(makeAssertionAuthenticatorData(flags: 0x04))
+    )
+
+    #expect(data.flags == 0x04)
+}
+
+@Test
 func acceptsWellFormedAuthenticatorExtensions() throws {
     let attestation = try AuthenticatorData.parseAttestation(
         Data(makeAttestationAuthenticatorData(flags: 0xC1) + [0xA0])
@@ -138,7 +166,7 @@ func rejectsTruncatedAuthenticatorData() {
 }
 
 @Test
-func rejectsWrongAuthenticatorFlags() {
+func rejectsAttestedCredentialFlagMismatch() {
     #expect(throws: AppAttestParsingError.invalidAuthenticatorData) {
         try AuthenticatorData.parseAttestation(
             Data(makeAttestationAuthenticatorData(flags: 0x01))
@@ -146,7 +174,7 @@ func rejectsWrongAuthenticatorFlags() {
     }
     #expect(throws: AppAttestParsingError.invalidAuthenticatorData) {
         try AuthenticatorData.parseAssertion(
-            Data(makeAssertionAuthenticatorData(flags: 0x41))
+            Data(makeAssertionAuthenticatorData(flags: 0x40))
         )
     }
 }
