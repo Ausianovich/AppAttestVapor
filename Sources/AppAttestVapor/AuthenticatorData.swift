@@ -55,9 +55,6 @@ struct AuthenticatorData: Equatable, Sendable {
             var reader = ByteReader(data)
             let rpIDHash = try reader.read(32)
             let flags = try reader.readByte()
-            guard flags & 0x40 == 0 else {
-                throw AppAttestParsingError.invalidAuthenticatorData
-            }
             let counter = try reader.readUInt32()
             try validateExtensions(flags: flags, reader: &reader)
 
