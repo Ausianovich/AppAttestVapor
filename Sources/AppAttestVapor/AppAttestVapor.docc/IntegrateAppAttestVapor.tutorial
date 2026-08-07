@@ -12,13 +12,13 @@
 
         @Steps {
             @Step {
-                Understand the runtime roles:
+                Understand the runtime roles and the concrete trust boundary:
 
                 - Client: `AppAttestTransport` owns key generation, Keychain `keyID`, and proof generation.
-                - Server: `AppAttestRoutes` owns challenge storage and proof verification entrypoints.
+                - Server: `AppAttestRoutes` owns challenge storage and attestation proof verification entrypoints.
                 - Middleware: `AppAttestMiddleware` guards only protected routes.
 
-                The same `routePrefix` is required on both sides.
+                @Code(name: "AppAttestFlow.swift", file: "AppAttestFlow.swift", reset: true)
             }
             @Step {
                 Verify one request lifecycle:
@@ -28,6 +28,8 @@
                 3. Server saves `(keyID, publicKey, counter)` and deletes challenge.
                 4. Every protected request gets a new challenge and an assertion header set.
                 5. Middleware verifies challenge freshness, signature, and counter monotonicity.
+
+                @Code(name: "FlowVerification.swift", file: "FlowVerification.swift", reset: true)
             }
         }
     }
@@ -55,6 +57,8 @@
 
                 - PostgreSQL database `app_attest`, URL `postgres://postgres:postgres@127.0.0.1:5432/app_attest`
                 - Valkey exposed on `127.0.0.1:6379`.
+
+                @Code(name: "LocalServices.sh", file: "LocalServices.sh", reset: true)
             }
         }
     }
@@ -95,6 +99,8 @@
                 Implement `advanceCounter` as one conditional `UPDATE ... RETURNING`.
                 It must return `true` only when `newValue > storedValue`.
                 This is the replay and reordering protection for all subsequent requests.
+
+                @Code(name: "AdvanceCounter.sql", file: "AdvanceCounter.sql", reset: true)
             }
         }
     }
@@ -117,11 +123,13 @@
                 - Team ID from Apple Developer account
                 - Protected app Bundle ID
                 - Environment (`.development` with development entitlement, `.production` otherwise)
+
+                @Code(name: "ServerPrereq.swift", file: "ServerPrereq.swift", reset: true)
             }
             @Step {
                 Run migration before accepting traffic so credential table exists for attestation writes.
 
-                @Code(name: "Terminal.sh", file: "MigrateServer.sh", reset: true)
+                @Code(name: "MigrateServer.sh", file: "MigrateServer.sh", reset: true)
             }
         }
     }
@@ -145,11 +153,13 @@
                 - `/health` remains public
                 - `/app-attest/challenge` works without App Attest headers
                 - Protected handlers require `AppAttestMiddleware`.
+
+                @Code(name: "VerifyLocalServer.sh", file: "VerifyLocalServer.sh", reset: true)
             }
             @Step {
                 Start server using the same PostgreSQL URL as migration.
 
-                @Code(name: "Terminal.sh", file: "RunServer.sh", reset: true)
+                @Code(name: "RunServer.sh", file: "RunServer.sh", reset: true)
             }
         }
     }
@@ -164,13 +174,13 @@
                 Call the service challenge endpoint with a dummy Base64 `keyID`.
                 Expect `200` and a Base64 challenge value.
 
-                @Code(name: "Terminal.sh", file: "VerifyChallenge.sh", reset: true)
+                @Code(name: "VerifyChallenge.sh", file: "VerifyChallenge.sh", reset: true)
             }
             @Step {
                 Call a protected route without App Attest headers.
                 Expect `403` and `{"code":"app_attest_invalid"}`.
 
-                @Code(name: "Terminal.sh", file: "VerifyProtectedRoute.sh", reset: true)
+                @Code(name: "VerifyProtectedRoute.sh", file: "VerifyProtectedRoute.sh", reset: true)
             }
             @Step {
                 Integrate with `AppAttestTransport` in client app:
@@ -178,6 +188,8 @@
                 1. First protected request performs key generation and attestation.
                 2. Subsequent protected requests include assertion headers.
                 3. Replay/expired challenge responses trigger bounded transport recovery.
+
+                @Code(name: "ClientTransport.swift", file: "ClientTransport.swift", reset: true)
             }
         }
     }
