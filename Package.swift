@@ -20,38 +20,14 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(
-            url: "https://github.com/pointfreeco/swift-dependencies",
-            from: "1.14.1"
-        ),
-        .package(
-            url: "https://github.com/vapor/vapor.git",
-            from: "4.121.4"
-        ),
-        .package(
-            url: "https://github.com/vapor-community/valkey.git",
-            from: "1.2.0"
-        ),
-        .package(
-            url: "https://github.com/apple/swift-openapi-runtime.git",
-            from: "1.12.0"
-        ),
-        .package(
-            url: "https://github.com/apple/swift-crypto.git",
-            from: "4.5.1"
-        ),
-        .package(
-            url: "https://github.com/apple/swift-certificates.git",
-            from: "1.19.4"
-        ),
-        .package(
-            url: "https://github.com/valpackett/SwiftCBOR.git",
-            "0.6.0"..<"0.7.0"
-        ),
-        .package(
-            url: "git@github.com:Ausianovich/KeyChain.git",
-            from: "2.0.0"
-        ),
+        .package(url: "https://github.com/pointfreeco/swift-dependencies", from: "1.14.1"),
+        .package(url: "https://github.com/vapor/vapor.git", from: "4.121.4"),
+        .package(url: "https://github.com/vapor-community/valkey.git", from: "1.2.0"),
+        .package(url: "https://github.com/apple/swift-openapi-runtime.git", from: "1.12.0"),
+        .package(url: "https://github.com/apple/swift-crypto.git", from: "4.5.1"),
+        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.19.4"),
+        .package(url: "https://github.com/valpackett/SwiftCBOR.git", "0.6.0"..<"0.7.0"),
+        .package(url: "https://github.com/Ausianovich/KeyChain.git", from: "2.0.0"),
     ],
     targets: [
         .target(

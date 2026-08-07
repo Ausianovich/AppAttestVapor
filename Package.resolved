@@ -1,5 +1,5 @@
 {
-  "originHash" : "32ae54a2d8b11713979deb4894742fe7f95bfab6b79e193ba191333573c38557",
+  "originHash" : "56b7c8407f6dd586e2c7ee2eff4db969b6775705f4b61d5d986d03ac822e66ad",
   "pins" : [
     {
       "identity" : "async-http-client",
@@ -40,7 +40,7 @@
     {
       "identity" : "keychain",
       "kind" : "remoteSourceControl",
-      "location" : "git@github.com:Ausianovich/KeyChain.git",
+      "location" : "https://github.com/Ausianovich/KeyChain.git",
       "state" : {
         "revision" : "9510fa9ddd4195d9f944276bc3a4b9d11adec400",
         "version" : "2.0.0"
