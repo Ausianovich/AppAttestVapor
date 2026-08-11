@@ -132,8 +132,9 @@ public actor AppAttestTransport<Base: ClientTransport>: ClientTransport {
         } catch {
             if let stage {
                 let errorType = String(reflecting: type(of: error))
+                let nsError = error as NSError
                 appAttestLogger.error(
-                    "App Attest protected request failed at \(stage, privacy: .public): \(errorType, privacy: .public)"
+                    "App Attest protected request failed at \(stage, privacy: .public): \(errorType, privacy: .public), domain=\(nsError.domain, privacy: .public), code=\(nsError.code, privacy: .public)"
                 )
             }
             throw error
@@ -188,8 +189,9 @@ public actor AppAttestTransport<Base: ClientTransport>: ClientTransport {
             return keyID
         } catch {
             let errorType = String(reflecting: type(of: error))
+            let nsError = error as NSError
             appAttestLogger.error(
-                "App Attest registration failed at \(stage, privacy: .public): \(errorType, privacy: .public)"
+                "App Attest registration failed at \(stage, privacy: .public): \(errorType, privacy: .public), domain=\(nsError.domain, privacy: .public), code=\(nsError.code, privacy: .public)"
             )
             throw error
         }

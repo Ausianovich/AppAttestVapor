@@ -3,7 +3,7 @@ title: App Attest Validation Logging
 type: decision
 status: active
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-11
 tags: [decision, security, observability]
 keywords: [AppAttestDevice, AppAttestVapor, OSLog, SwiftLog, request.logger, LOG_LEVEL, validation-stage]
 related: [app_attest_device.md, app_attest_vapor.md, app_attest_integration.md]
@@ -28,7 +28,7 @@ Read when: adding App Attest validation | diagnosing registration or assertion f
 
 | Target | Logger | Success | Failure |
 |---|---|---|---|
-| `AppAttestDevice` | `OSLog.Logger` | `debug` at registration, challenge, assertion, recovery boundaries | `error` with operation stage and error type |
+| `AppAttestDevice` | `OSLog.Logger` | `debug` at registration, challenge, assertion, recovery boundaries | `error` with operation stage, error type, NSError domain, and code |
 | `AppAttestVapor` | `Request.logger` / SwiftLog | `debug` after challenge issue, attestation acceptance, assertion acceptance | `error` with `component=app-attest`, `stage`, and error type |
 
 Server stage values distinguish at least:
