@@ -3,7 +3,7 @@ title: AppAttestVapor API
 type: api
 status: active
 created: 2026-08-06
-updated: 2026-08-07
+updated: 2026-08-11
 tags: [api, security, vapor]
 keywords: [AppAttestVapor, AppAttestConfiguration, AppAttestMiddleware, AppAttestCredentialClient, prepareDependencies, VaporTransport, VaporValkey, ValkeyClient, advanceCounter, app_attest_unavailable]
 related: [app_attest_integration.md]
@@ -11,14 +11,20 @@ related: [app_attest_integration.md]
 
 ## TL;DR
 Vapor service routes are registered directly on `Application`; `AppAttestMiddleware` protects only selected route groups.
-Use this page before you wire OpenAPI handlers or deploy a production host.
+Read when: wiring OpenAPI handlers | deploying a production host | debugging server-side App Attest validation
 
 ## Summary
 `AppAttestVapor` provides challenge issuance, initial attestation verification, and protected-route assertion verification.
 Valkey stores only one short-lived challenge per `keyID` (`60` seconds default).  
 The host supplies durable credential persistence through `AppAttestCredentialClient`.
 
-## Quick reference
+## Consumers
+
+- Vapor applications exposing App Attest service routes
+- Protected route groups using `AppAttestMiddleware`
+- Durable credential stores implementing `AppAttestCredentialClient`
+
+## Quick ref
 
 | API | Contract |
 |---|---|
@@ -133,7 +139,7 @@ let transport = VaporTransport(routesBuilder: protected)
 try Handler().registerHandlers(on: transport, serverURL: URL(string: "/api")!)
 ```
 
-## Endpoint behavior
+## Endpoints
 
 | Method and path | Success | Meaning |
 |---|---|---|
@@ -142,12 +148,15 @@ try Handler().registerHandlers(on: transport, serverURL: URL(string: "/api")!)
 
 `routePrefix` changes both paths. Keep prefix equal to the same value passed to client `AppAttestTransport`.
 
-## Request and response bodies
+## Request shape
 
 - Challenge request: `{"keyID":"<base64-32-bytes>"}`
-- Challenge response: `{"challenge":"<base64-32-bytes>"}`
 - Attestation request:
   - `{"keyID":"...","challenge":"...","attestationObject":"..."}`
+
+## Response shape
+
+- Challenge response: `{"challenge":"<base64-32-bytes>"}`
 - Error response: `{"code":"<stable-code>"}`
 
 ## Server side verification stages
@@ -173,7 +182,7 @@ try Handler().registerHandlers(on: transport, serverURL: URL(string: "/api")!)
 5. Atomically advance monotonic counter.
 6. Invoke next handler only when all checks succeed.
 
-## Error handling
+## Failures
 
 | Condition | HTTP | Error code | Retry |
 |---|---:|---|---|

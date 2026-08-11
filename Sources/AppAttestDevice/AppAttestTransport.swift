@@ -1,6 +1,7 @@
 import AppAttestCore
 import CryptoKit
 import Dependencies
+import DeviceCheck
 import Foundation
 import HTTPTypes
 import OSLog
@@ -68,10 +69,28 @@ public actor AppAttestTransport<Base: ClientTransport>: ClientTransport {
                     body: bodyData
                 )
                 stage = "assertion"
-                let assertion = try await service.generateAssertion(
-                    keyID,
-                    Data(SHA256.hash(data: clientData))
-                )
+                let assertion: Data
+                do {
+                    assertion = try await service.generateAssertion(
+                        keyID,
+                        Data(SHA256.hash(data: clientData))
+                    )
+                } catch {
+                    let nsError = error as NSError
+                    guard
+                        retriesRemaining > 0,
+                        nsError.domain == DCErrorDomain,
+                        nsError.code == DCError.Code.invalidKey.rawValue
+                    else { throw error }
+                    retriesRemaining -= 1
+                    appAttestLogger.debug("App Attest recovery started: invalidKey")
+                    stage = "keychain-delete"
+                    try await keyIDStore.delete()
+                    pendingKeyID = nil
+                    stage = nil
+                    keyID = try await ensureRegistered(baseURL: baseURL)
+                    continue
+                }
                 appAttestLogger.debug("App Attest assertion generated")
 
                 var signedRequest = request

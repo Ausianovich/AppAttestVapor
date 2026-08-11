@@ -2,17 +2,17 @@
 title: AppAttestDevice API
 type: api
 status: active
-updated: 2026-08-07
+updated: 2026-08-11
 created: 2026-08-06
 tags: [api, security, device]
-keywords: [AppAttestDevice, AppAttestTransport, ClientTransport, URLSessionTransport, DCAppAttestService, KeyChain, keyID, generateAssertion, app_attest_challenge_missing, app_attest_credential_missing]
+keywords: [AppAttestDevice, AppAttestTransport, ClientTransport, URLSessionTransport, DCAppAttestService, DCError.invalidKey, KeyChain, keyID, generateAssertion, app_attest_challenge_missing, app_attest_credential_missing]
 related: [app_attest_vapor.md]
 ---
 
 ## TL;DR
 `AppAttestTransport` wraps any OpenAPI `ClientTransport`, performs one-time attestation, then signs each protected request.
 
-Use this page when wiring a generated OpenAPI client, debugging registration failures, or tuning retry behavior.
+Read when: wiring a generated OpenAPI client | debugging registration failures | tuning retry behavior
 
 ## Summary
 The transport performs all App Attest state transitions locally:
@@ -25,7 +25,13 @@ The transport performs all App Attest state transitions locally:
 
 Proof generation runs in an actor and is intentionally sequential (`isSending` gate), so protected requests are serialized and counters stay monotonic.
 
-## Quick reference
+## Consumers
+
+- Generated OpenAPI clients requiring App Attest protection
+- Any base `ClientTransport`, including `URLSessionTransport`
+- Vapor hosts exposing matching `/app-attest/*` service routes
+
+## Quick ref
 
 | API | Contract |
 |---|---|
@@ -91,12 +97,13 @@ For a protected request:
 
 - `401` + `app_attest_challenge_missing` -> retry once with fresh challenge/assertion.
 - `401` + `app_attest_credential_missing` -> delete local key, re-run registration, retry once.
+- Local `DCError.invalidKey` from assertion generation -> delete stale Keychain key ID, re-run registration, retry once. This recovers after app reinstallation, device migration, or backup restoration.
 - Any other `401/403/400` -> no transport retry.
-- `503` or transport failures in registration are surfaced to caller; local key is preserved unless explicitly deleted by credential-missing recovery.
+- `503`, other assertion failures, or transport failures in registration are surfaced to caller; local key is preserved.
 
 The retry counter is one; each failure path resets `stage` and re-evaluates through registration if needed.
 
-## Endpoints used by the transport
+## Endpoints
 
 | Method and path | Purpose | Called from |
 |---|---|---|
@@ -105,17 +112,18 @@ The retry counter is one; each failure path resets `stage` and re-evaluates thro
 
 Challenge/attestation calls are made through the same base transport but outside `send` recursion (service helper methods bypass `send` wrapper path).
 
-## Error types
+## Failures
 
 | Error | Meaning | Next behavior |
 |---|---|---|
 | `unsupported` | Device does not support App Attest | no retry |
 | `challengeMissing` | server reported missing/expired/replayed challenge | recoverable: retry once |
 | `credentialMissing` | server has no credential for keyID | recoverable: delete key + re-register |
+| `DCError.invalidKey` | DeviceCheck rejected the stored App Attest key | recoverable once: delete key ID + re-register |
 | `invalidResponse` | malformed server payload | local throw |
 | `registrationFailed` | attestation endpoint returned non-success | local throw |
 
-## Constraint notes
+## Constraints
 
 - `iOS 26+`: runtime support check is dynamic.
 - `macOS 26`: compiles, but protected requests may return `unsupported`.
@@ -123,7 +131,7 @@ Challenge/attestation calls are made through the same base transport but outside
 - `KeyChain` stores only `keyID`; no user data or public key.
 - Streaming upload requests are not supported because request bodies are collected.
 
-## Request/response payloads
+## Request shape
 
 - Attestation payload to client service:
   - key ID
@@ -131,6 +139,9 @@ Challenge/attestation calls are made through the same base transport but outside
   - base64 attestation object
 - Protected request metadata:
   - key ID + challenge + assertion in headers
+
+## Response shape
+
 - Protected response:
   - normal OpenAPI result is returned on success
   - on guarded errors, response body may be replayed after buffering

@@ -3,7 +3,7 @@ title: App Attest Integration
 type: architecture
 status: active
 created: 2026-08-05
-updated: 2026-08-07
+updated: 2026-08-11
 tags: [architecture, security]
 keywords: [AppAttestVapor, AppAttestDevice, AppAttestTransport, AppAttestMiddleware, VaporValkey, ClientTransport, DCAppAttestService, keyID, challenge, assertion, attestation]
 related: []
@@ -26,6 +26,7 @@ Durable credentials (`publicKey`, `counter`) are host-owned and stored through `
   - Requests challenges and attests keys when needed.
   - Builds canonical client data and generates assertions for every protected request.
   - Performs bounded recovery on server recoverable codes (`app_attest_challenge_missing`, `app_attest_credential_missing`).
+  - Re-registers once when `DCAppAttestService.generateAssertion` reports `DCError.invalidKey`, including after app reinstallation.
 - Server side:
   - Issues one challenge per `keyID` request with short TTL.
   - Verifies attestation object, then persists `(keyID, publicKey, counter)` once.
@@ -159,6 +160,7 @@ Host must provide all closure operations:
 | No local support | Local typed error | - | - |
 | Missing/expired challenge | Retry once | `401` | `app_attest_challenge_missing` |
 | Credential missing | Delete Keychain key, re-register once | `401` | `app_attest_credential_missing` |
+| Local App Attest key invalid | Delete Keychain key ID, re-register once | - | `DCError.invalidKey` |
 | Invalid signature/shape/env/counter | Return without retry | `400` or `403` | `app_attest_invalid` |
 | Infrastructure error | Return no retry, preserve local key | `503` | `app_attest_unavailable` |
 
