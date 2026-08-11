@@ -5,7 +5,7 @@ status: active
 updated: 2026-08-11
 created: 2026-08-06
 tags: [api, security, device]
-keywords: [AppAttestDevice, AppAttestTransport, ClientTransport, URLSessionTransport, DCAppAttestService, DCError.invalidKey, KeyChain, keyID, generateAssertion, app_attest_challenge_missing, app_attest_credential_missing]
+keywords: [AppAttestDevice, AppAttestTransport, ClientTransport, URLSessionTransport, DCAppAttestService, DCError.invalidKey, DCError.invalidInput, KeyChain, keyID, generateAssertion, app_attest_challenge_missing, app_attest_credential_missing]
 related: [app_attest_vapor.md]
 ---
 
@@ -97,7 +97,7 @@ For a protected request:
 
 - `401` + `app_attest_challenge_missing` -> retry once with fresh challenge/assertion.
 - `401` + `app_attest_credential_missing` -> delete local key, re-run registration, retry once.
-- Local `DCError.invalidKey` from assertion generation -> delete stale Keychain key ID, re-run registration, retry once. This recovers after app reinstallation, device migration, or backup restoration.
+- Local `DCError.invalidKey` or `DCError.invalidInput` from assertion generation -> delete stale Keychain key ID, re-run registration, retry once. DeviceCheck may report either code for a key left in Keychain after app reinstallation.
 - Any other `401/403/400` -> no transport retry.
 - `503`, other assertion failures, or transport failures in registration are surfaced to caller; local key is preserved.
 
@@ -120,6 +120,7 @@ Challenge/attestation calls are made through the same base transport but outside
 | `challengeMissing` | server reported missing/expired/replayed challenge | recoverable: retry once |
 | `credentialMissing` | server has no credential for keyID | recoverable: delete key + re-register |
 | `DCError.invalidKey` | DeviceCheck rejected the stored App Attest key | recoverable once: delete key ID + re-register |
+| `DCError.invalidInput` during assertion | DeviceCheck rejected the stored key input, including observed post-reinstallation failures | recoverable once: delete key ID + re-register |
 | `invalidResponse` | malformed server payload | local throw |
 | `registrationFailed` | attestation endpoint returned non-success | local throw |
 

@@ -118,7 +118,9 @@ func assertionFailureDoesNotRetryOrRemoveStoredKey() async {
 
 @Test
 func invalidKeyDuringAssertionRegistersNewKeyAndRetriesRequestOnce() async throws {
-    let state = RecoveryState(assertionHasInvalidKey: true)
+    let state = RecoveryState(
+        assertionDeviceCheckErrorCode: DCError.Code.invalidKey.rawValue
+    )
 
     let (response, _) = try await sendRecoveryRequest(state: state)
 
@@ -128,6 +130,21 @@ func invalidKeyDuringAssertionRegistersNewKeyAndRetriesRequestOnce() async throw
     #expect(await state.deletedKeyCount == 1)
     #expect(await state.generatedKeyCount == 1)
     #expect(await state.attestationCount == 1)
+    #expect(await state.protectedKeyIDs == [newRecoveryKeyID])
+    #expect(await state.storedKeyID == newRecoveryKeyID)
+}
+
+@Test
+func invalidInputDuringAssertionRegistersNewKeyAndRetriesRequestOnce() async throws {
+    let state = RecoveryState(
+        assertionDeviceCheckErrorCode: DCError.Code.invalidInput.rawValue
+    )
+
+    let (response, _) = try await sendRecoveryRequest(state: state)
+
+    #expect(response.status == .noContent)
+    #expect(await state.deletedKeyCount == 1)
+    #expect(await state.generatedKeyCount == 1)
     #expect(await state.protectedKeyIDs == [newRecoveryKeyID])
     #expect(await state.storedKeyID == newRecoveryKeyID)
 }
@@ -201,7 +218,7 @@ private actor RecoveryState {
     private let keychainReadFails: Bool
     private let keychainDeleteFails: Bool
     private let assertionFails: Bool
-    private let assertionHasInvalidKey: Bool
+    private let assertionDeviceCheckErrorCode: Int?
     private let attestationFails: Bool
     private var protectedResponses: [RecoveryResponse]
 
@@ -211,7 +228,7 @@ private actor RecoveryState {
         keychainReadFails: Bool = false,
         keychainDeleteFails: Bool = false,
         assertionFails: Bool = false,
-        assertionHasInvalidKey: Bool = false,
+        assertionDeviceCheckErrorCode: Int? = nil,
         attestationFails: Bool = false,
         protectedResponses: [RecoveryResponse] = [.success]
     ) {
@@ -220,7 +237,7 @@ private actor RecoveryState {
         self.keychainReadFails = keychainReadFails
         self.keychainDeleteFails = keychainDeleteFails
         self.assertionFails = assertionFails
-        self.assertionHasInvalidKey = assertionHasInvalidKey
+        self.assertionDeviceCheckErrorCode = assertionDeviceCheckErrorCode
         self.attestationFails = attestationFails
         self.protectedResponses = protectedResponses
     }
@@ -260,10 +277,10 @@ private actor RecoveryState {
     func generateAssertion(keyID: String) throws -> Data {
         assertionCount += 1
         if assertionFails { throw RecoveryTestError.deviceCheck }
-        if assertionHasInvalidKey, keyID == oldRecoveryKeyID {
+        if let assertionDeviceCheckErrorCode, keyID == oldRecoveryKeyID {
             throw NSError(
                 domain: DCErrorDomain,
-                code: DCError.Code.invalidKey.rawValue
+                code: assertionDeviceCheckErrorCode
             )
         }
         return Data([7, 8, 9])

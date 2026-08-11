@@ -81,9 +81,10 @@ public actor AppAttestTransport<Base: ClientTransport>: ClientTransport {
                         retriesRemaining > 0,
                         nsError.domain == DCErrorDomain,
                         nsError.code == DCError.Code.invalidKey.rawValue
+                            || nsError.code == DCError.Code.invalidInput.rawValue
                     else { throw error }
                     retriesRemaining -= 1
-                    appAttestLogger.debug("App Attest recovery started: invalidKey")
+                    appAttestLogger.debug("App Attest recovery started: invalidStoredKey")
                     stage = "keychain-delete"
                     try await keyIDStore.delete()
                     pendingKeyID = nil
